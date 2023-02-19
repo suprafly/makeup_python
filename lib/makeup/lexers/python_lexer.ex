@@ -5,7 +5,7 @@ defmodule Makeup.Lexers.PythonLexer do
 
   import NimbleParsec
   import Makeup.Lexer.Combinators
-  # import Makeup.Lexer.Groups
+  import Makeup.Lexer.Groups
   # import Makeup.Lexers.PythonLexer.Helpers
 
   @behaviour Makeup.Lexer
@@ -62,6 +62,11 @@ defmodule Makeup.Lexers.PythonLexer do
     |> optional(ascii_string([?a..?z, ?_, ?0..?9, ?A..?Z], min: 1))
     |> lexeme()
     |> token(:name)
+
+  decorator =
+    string("@")
+    |> ascii_string([?0..?9, ?a..?z, ?A..?Z], min: 1)
+    |> token(:string_symbol)
 
   # %-formatting
   # "%s %s" %('Hello','World',)
@@ -161,13 +166,13 @@ defmodule Makeup.Lexers.PythonLexer do
         async elif if or yield
       )
     |> word_from_list()
+    |> ascii_string([?\s, ?\t], min: 1)
     |> token(:keyword)
 
 
   delimiter_pairs = [
     delimiters_punctuation,
   ]
-
 
   # This does the work of parsing
   root_element_combinator =
@@ -205,6 +210,8 @@ defmodule Makeup.Lexers.PythonLexer do
           number_integer,
           # Names
           variable,
+
+          decorator,
 
           # from C:
           # define,
@@ -249,38 +256,131 @@ defmodule Makeup.Lexers.PythonLexer do
     inline: @inline
   )
 
-  @impl Makeup.Lexer
-  def postprocess(_tokens, _opts \\ []) do
-  end
-
-  # # Public API for the lexer
-  # @impl Makeup.Lexer
-  # def lex(text, opts \\ []) do
-  #   # [Borrowed from the Elixir lexer for now](https://github.com/elixir-makeup/makeup_elixir/blob/master/lib/makeup/lexers/elixir_lexer.ex#L614)
-  #   # # ```
-  #   # group_prefix = Keyword.get(opts, :group_prefix, random_prefix(10))
-  #   # {:ok, tokens, "", _, _, _} = root("\n" <> text)
-
-  #   # tokens
-  #   # |> remove_initial_newline()
-  #   # |> postprocess([])
-  #   # |> match_groups(group_prefix)
-  #   # # ```
-  # end
-
   # ###################################################################
   # # Step #2: postprocess the list of tokens
   # ###################################################################
+
+  @keyword_declaration ~W[def class]
+  @keyword ~W[
+    await else pass
+    break except in raise
+    class finally is return
+    and continue for lambda try
+    as def from nonlocal while
+    assert del global not with
+    async elif if or yield
+  ]
+  @operator_word ["and", "or", "not", "in", "is"]
+  @keyword_namespace ~W[import from]
+  @name_constant ~W[True False None]
+
+  defp postprocess_helper([]), do: []
+
+  # # def add(x, y):
+  # defp postprocess_helper([
+  #        {:name, attrs1, text1},
+  #        {:whitespace, _, _} = ws1,
+  #        {:name, _, _text2} = param,
+  #        {:whitespace, _, _} = ws2,
+  #        {:punctuation, _, _} = p
+  #        | tokens
+  #      ])
+  #      when text1 == "def" do
+  #   [{:keyword_declaration, attrs1, text1}, ws1, param, ws2, p | postprocess_helper(tokens)]
+  # end
+
+  # # class ClassName:
+  # defp postprocess_helper([
+  #        {:name, attrs1, text1},
+  #        {:whitespace, _, _} = ws1,
+  #        {:name, _, _text2} = param,
+  #        {:punctuation, _, _} = p
+  #        | tokens
+  #      ])
+  #      when text1 == "class" do
+  #   [{:keyword_declaration, attrs1, text1}, ws1, param, p | postprocess_helper(tokens)]
+  # end
+
+  # @staticmethod
+  defp postprocess_helper([{:string_symbol, attrs, [text1, _text2] = decorator} | tokens]) when text1 == "@" do
+    # todo - not clear what token we should use, so I am guessing...
+    [{:name_tag, attrs, decorator} | postprocess_helper(tokens)]
+  end
+
+  defp postprocess_helper([{:name, attrs, text} | tokens]) when text in @keyword do
+    [{:keyword, attrs, text} | postprocess_helper(tokens)]
+  end
+
+  defp postprocess_helper([{:name, attrs, text} | tokens]) when text in @keyword_declaration do
+    [{:keyword_declaration, attrs, text} | postprocess_helper(tokens)]
+  end
+
+  defp postprocess_helper([{:name, attrs, text} | tokens]) when text in @operator_word do
+    [{:operator_word, attrs, text} | postprocess_helper(tokens)]
+  end
+
+  defp postprocess_helper([{:name, attrs, text} | tokens]) when text in @keyword_namespace do
+    [{:keyword_namespace, attrs, text} | postprocess_helper(tokens)]
+  end
+
+  defp postprocess_helper([{:name, attrs, text} | tokens]) when text in @name_constant do
+    [{:name_constant, attrs, text} | postprocess_helper(tokens)]
+  end
+
+  # Unused variables
+  defp postprocess_helper([{:name, attrs, "_" <> _name = text} | tokens]),
+    do: [{:comment, attrs, text} | postprocess_helper(tokens)]
+
+  # Otherwise, don't do anything with the current token and go to the next token.
+  defp postprocess_helper([token | tokens]), do: [token | postprocess_helper(tokens)]
+
+  # Public API
+  @impl Makeup.Lexer
+  def postprocess(tokens, _opts \\ []), do: postprocess_helper(tokens)
 
   # ###################################################################
   # # Step #3: highlight matching delimiters
   # ###################################################################
 
   @impl Makeup.Lexer
-  def match_groups(_, _) do
+  defgroupmatcher(:match_groups,
+    parentheses: [
+      open: [[{:punctuation, %{language: :c}, "("}]],
+      close: [[{:punctuation, %{language: :c}, ")"}]]
+    ],
+    array: [
+      open: [[{:punctuation, %{language: :c}, "["}]],
+      close: [[{:punctuation, %{language: :c}, "]"}]]
+    ],
+    brackets: [
+      open: [[{:punctuation, %{language: :c}, "{"}]],
+      close: [[{:punctuation, %{language: :c}, "}"}]]
+    ]
+    # percent_string_interpolation: [
+    #   open: [[{:punctuation, %{language: :c}, "%("}]],
+    #   close: [[{:punctuation, %{language: :c}, ")"}]]
+    # ],
+    # f_string_interpolation: [
+    #   open: [[{:punctuation, %{language: :c}, "f'"}]],
+    #   close: [[{:punctuation, %{language: :c}, "'"}]]
+    # ],
+  )
+
+  defp remove_initial_newline([{ttype, meta, text} | tokens]) do
+    case to_string(text) do
+      "\n" -> tokens
+      "\n" <> rest -> [{ttype, meta, rest} | tokens]
+    end
   end
 
   @impl Makeup.Lexer
-  def lex(_text, _opts \\ []) do
+  def lex(text, opts \\ []) do
+    group_prefix = Keyword.get(opts, :group_prefix, random_prefix(10))
+    {:ok, tokens, "", _, _, _} = root("\n" <> text)
+
+    tokens
+    |> remove_initial_newline()
+    |> postprocess([])
+    |> match_groups(group_prefix)
   end
 end
