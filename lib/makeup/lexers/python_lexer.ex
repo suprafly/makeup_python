@@ -243,21 +243,9 @@ defmodule Makeup.Lexers.PythonLexer do
   # # Step #2: postprocess the list of tokens
   # ###################################################################
 
-  @keyword_declaration ~W[def class]
-
-  @expr_keyword [
-    "async for",
-    "await",
-    "else",
-    "for",
-    "if",
-    "lambda",
-    "yield",
-    "yield from"
-  ]
-
   @keyword [
     "assert",
+    "async for",
     "async",
     "await",
     "break",
@@ -277,8 +265,8 @@ defmodule Makeup.Lexers.PythonLexer do
     "return",
     "try",
     "while",
-    "yield",
     "yield from",
+    "yield",
     "as",
     "with"
   ]
@@ -601,10 +589,6 @@ defmodule Makeup.Lexers.PythonLexer do
 
   defp postprocess_helper([{:name, attrs, text} | tokens]) when text in @magic_vars do
     [{:name_variable_magic, attrs, text} | postprocess_helper(tokens)]
-  end
-
-  defp postprocess_helper([{:name, attrs, text} | tokens]) when text in @keyword_declaration do
-    [{:keyword_declaration, attrs, text} | postprocess_helper(tokens)]
   end
 
   defp postprocess_helper([{:name, attrs, text} | tokens]) when text in @operator_word do
