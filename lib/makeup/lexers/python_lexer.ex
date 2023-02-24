@@ -44,8 +44,12 @@ defmodule Makeup.Lexers.PythonLexer do
   inline_comment =
     string("#")
     |> concat(line)
-    |> eos()
     |> token(:comment_single)
+
+  hashbang_comment =
+    string("#!")
+    |> concat(line)
+    |> token(:comment_hashbang)
 
   unicode_char_in_string =
     string("\\u")
@@ -78,8 +82,8 @@ defmodule Makeup.Lexers.PythonLexer do
     escaped_char,
   ]
 
-  single_quoted_heredocs = string_like("'''", "'''", combinators_inside_string, :comment_multiline)
-  double_quoted_heredocs = string_like(~S["""], ~S["""], combinators_inside_string, :comment_multiline)
+  single_quoted_heredocs = string_like("'''", "'''", combinators_inside_string, :string_doc)
+  double_quoted_heredocs = string_like(~S["""], ~S["""], combinators_inside_string, :string_doc)
 
   # f-strings
   # f'Hello {name}! This is {program}'
@@ -97,17 +101,18 @@ defmodule Makeup.Lexers.PythonLexer do
   single_quoted_string = string_like("'", "'", combinators_inside_string, :string)
   double_quoted_string = string_like("\"", "\"", combinators_inside_string, :string)
 
-  number_integer = integer(min: 1) |> token(:number_integer)
+  number_integer = ascii_string([?0..?9], min: 1) |> token(:number_integer)
 
   float_scientific_notation =
     ascii_string([?e, ?E], 1)
     |> optional(choice([string("-"), string("+")]))
     |> concat(number_integer)
 
+  # floats can start with a "." and no integer part
   number_float =
-    number_integer
+    ascii_string([?0..?9], min: 0)
     |> string(".")
-    |> concat(number_integer)
+    |> concat(ascii_string([?0..?9], min: 0))
     |> optional(float_scientific_notation)
     |> token(:number_float)
 
@@ -150,26 +155,6 @@ defmodule Makeup.Lexers.PythonLexer do
     |> word_from_list()
     |> token(:punctuation)
 
-  _special_symbols =
-    ~W(' " # \ @)
-    |> word_from_list()
-    |> token(:punctuation)
-
-  keyword =
-    ~W(
-        False await else import pass
-        None break except in raise
-        True class finally is return
-        and continue for lambda try
-        as def from nonlocal while
-        assert del global not with
-        async elif if or yield
-      )
-    |> word_from_list()
-    |> ascii_string([?\s, ?\t], min: 1)
-    |> token(:keyword)
-
-
   delimiter_pairs = [
     delimiters_punctuation,
   ]
@@ -182,10 +167,8 @@ defmodule Makeup.Lexers.PythonLexer do
         whitespace,
 
         # Comments
+        hashbang_comment,
         inline_comment,
-
-        # Syntax sugar for keyword lists (must come before variables and strings)
-        keyword,
 
         single_quoted_heredocs,
         double_quoted_heredocs,
@@ -197,29 +180,27 @@ defmodule Makeup.Lexers.PythonLexer do
         single_quoted_f_string_interpolation,
         double_quoted_f_string_interpolation,
       ] ++
+        [
+          # Floats must come before integers
+          # and before punctuation, because a float can
+          # start with a "."
+          number_float
+        ] ++
         delimiter_pairs ++
         [
           # Operators
           operator,
+
           # Numbers
           number_bin,
           number_oct,
           number_hex,
-          # Floats must come before integers
-          number_float,
           number_integer,
+
           # Names
           variable,
 
           decorator,
-
-          # from C:
-          # define,
-
-          # from elixir:
-          # Module names
-          # module,
-
           punctuation,
           # If we can't parse any of the above, we highlight the next character as an error
           # and proceed from there.
@@ -261,45 +242,338 @@ defmodule Makeup.Lexers.PythonLexer do
   # ###################################################################
 
   @keyword_declaration ~W[def class]
-  @keyword ~W[
-    await else pass
-    break except in raise
-    class finally is return
-    and continue for lambda try
-    as def from nonlocal while
-    assert del global not with
-    async elif if or yield
+
+  @expr_keyword [
+    "async for",
+    "await",
+    "else",
+    "for",
+    "if",
+    "lambda",
+    "yield",
+    "yield from"
   ]
+
+  @keyword [
+    "assert",
+    "async",
+    "await",
+    "break",
+    "continue",
+    "del",
+    "elif",
+    "else",
+    "except",
+    "finally",
+    "for",
+    "global",
+    "if",
+    "lambda",
+    "pass",
+    "raise",
+    "nonlocal",
+    "return",
+    "try",
+    "while",
+    "yield",
+    "yield from",
+    "as",
+    "with"
+  ]
+
+  @builtins [
+    "__import__",
+    "abs",
+    "aiter",
+    "all",
+    "any",
+    "bin",
+    "bool",
+    "bytearray",
+    "breakpoint",
+    "bytes",
+    "callable",
+    "chr",
+    "classmethod",
+    "compile",
+    "complex",
+    "delattr",
+    "dict",
+    "dir",
+    "divmod",
+    "enumerate",
+    "eval",
+    "filter",
+    "float",
+    "format",
+    "frozenset",
+    "getattr",
+    "globals",
+    "hasattr",
+    "hash",
+    "hex",
+    "id",
+    "input",
+    "int",
+    "isinstance",
+    "issubclass",
+    "iter",
+    "len",
+    "list",
+    "locals",
+    "map",
+    "max",
+    "memoryview",
+    "min",
+    "next",
+    "object",
+    "oct",
+    "open",
+    "ord",
+    "pow",
+    "print",
+    "property",
+    "range",
+    "repr",
+    "reversed",
+    "round",
+    "set",
+    "setattr",
+    "slice",
+    "sorted",
+    "staticmethod",
+    "str",
+    "sum",
+    "super",
+    "tuple",
+    "type",
+    "vars",
+    "zip"
+  ]
+
+  @exceptions [
+    "ArithmeticError",
+    "AssertionError",
+    "AttributeError",
+    "BaseException",
+    "BufferError",
+    "BytesWarning",
+    "DeprecationWarning",
+    "EOFError",
+    "EnvironmentError",
+    "Exception",
+    "FloatingPointError",
+    "FutureWarning",
+    "GeneratorExit",
+    "IOError",
+    "ImportError",
+    "ImportWarning",
+    "IndentationError",
+    "IndexError",
+    "KeyError",
+    "KeyboardInterrupt",
+    "LookupError",
+    "MemoryError",
+    "NameError",
+    "NotImplementedError",
+    "OSError",
+    "OverflowError",
+    "PendingDeprecationWarning",
+    "ReferenceError",
+    "ResourceWarning",
+    "RuntimeError",
+    "RuntimeWarning",
+    "StopIteration",
+    "SyntaxError",
+    "SyntaxWarning",
+    "SystemError",
+    "SystemExit",
+    "TabError",
+    "TypeError",
+    "UnboundLocalError",
+    "UnicodeDecodeError",
+    "UnicodeEncodeError",
+    "UnicodeError",
+    "UnicodeTranslateError",
+    "UnicodeWarning",
+    "UserWarning",
+    "ValueError",
+    "VMSError",
+    "Warning",
+    "WindowsError",
+    "ZeroDivisionError",
+    "BlockingIOError",
+    "ChildProcessError",
+    "ConnectionError",
+    "BrokenPipeError",
+    "ConnectionAbortedError",
+    "ConnectionRefusedError",
+    "ConnectionResetError",
+    "FileExistsError",
+    "FileNotFoundError",
+    "InterruptedError",
+    "IsADirectoryError",
+    "NotADirectoryError",
+    "PermissionError",
+    "ProcessLookupError",
+    "TimeoutError",
+    "StopAsyncIteration",
+    "ModuleNotFoundError",
+    "RecursionError",
+    "EncodingWarning"
+  ]
+
+  @magic_funcs [
+    "__abs__",
+    "__add__",
+    "__aenter__",
+    "__aexit__",
+    "__aiter__",
+    "__and__",
+    "__anext__",
+    "__await__",
+    "__bool__",
+    "__bytes__",
+    "__call__",
+    "__complex__",
+    "__contains__",
+    "__del__",
+    "__delattr__",
+    "__delete__",
+    "__delitem__",
+    "__dir__",
+    "__divmod__",
+    "__enter__",
+    "__eq__",
+    "__exit__",
+    "__float__",
+    "__floordiv__",
+    "__format__",
+    "__ge__",
+    "__get__",
+    "__getattr__",
+    "__getattribute__",
+    "__getitem__",
+    "__gt__",
+    "__hash__",
+    "__iadd__",
+    "__iand__",
+    "__ifloordiv__",
+    "__ilshift__",
+    "__imatmul__",
+    "__imod__",
+    "__imul__",
+    "__index__",
+    "__init__",
+    "__instancecheck__",
+    "__int__",
+    "__invert__",
+    "__ior__",
+    "__ipow__",
+    "__irshift__",
+    "__isub__",
+    "__iter__",
+    "__itruediv__",
+    "__ixor__",
+    "__le__",
+    "__len__",
+    "__length_hint__",
+    "__lshift__",
+    "__lt__",
+    "__matmul__",
+    "__missing__",
+    "__mod__",
+    "__mul__",
+    "__ne__",
+    "__neg__",
+    "__new__",
+    "__next__",
+    "__or__",
+    "__pos__",
+    "__pow__",
+    "__prepare__",
+    "__radd__",
+    "__rand__",
+    "__rdivmod__",
+    "__repr__",
+    "__reversed__",
+    "__rfloordiv__",
+    "__rlshift__",
+    "__rmatmul__",
+    "__rmod__",
+    "__rmul__",
+    "__ror__",
+    "__round__",
+    "__rpow__",
+    "__rrshift__",
+    "__rshift__",
+    "__rsub__",
+    "__rtruediv__",
+    "__rxor__",
+    "__set__",
+    "__setattr__",
+    "__setitem__",
+    "__str__",
+    "__sub__",
+    "__subclasscheck__",
+    "__truediv__",
+    "__xor__"
+  ]
+
+  @magic_vars [
+    "__annotations__",
+    "__bases__",
+    "__class__",
+    "__closure__",
+    "__code__",
+    "__defaults__",
+    "__dict__",
+    "__doc__",
+    "__file__",
+    "__func__",
+    "__globals__",
+    "__kwdefaults__",
+    "__module__",
+    "__mro__",
+    "__name__",
+    "__objclass__",
+    "__qualname__",
+    "__self__",
+    "__slots__",
+    "__weakref__"
+  ]
+
   @operator_word ["and", "or", "not", "in", "is"]
-  @keyword_namespace ~W[import from]
-  @name_constant ~W[True False None]
+  @keyword_namespace ~W[import from as]
+  @keyword_constant ~W[True False None]
 
   defp postprocess_helper([]), do: []
 
-  # # def add(x, y):
-  # defp postprocess_helper([
-  #        {:name, attrs1, text1},
-  #        {:whitespace, _, _} = ws1,
-  #        {:name, _, _text2} = param,
-  #        {:whitespace, _, _} = ws2,
-  #        {:punctuation, _, _} = p
-  #        | tokens
-  #      ])
-  #      when text1 == "def" do
-  #   [{:keyword_declaration, attrs1, text1}, ws1, param, ws2, p | postprocess_helper(tokens)]
-  # end
+  defp postprocess_helper([
+         {:name, attrs1, text1},
+         {:whitespace, _, _} = ws,
+         {:name, attrs2, text2} | tokens
+       ])
+       when text1 == "def" do
+    [
+      {:keyword_declaration, attrs1, text1},
+      ws,
+      {:name_function, attrs2, text2} | postprocess_helper(tokens)
+    ]
+  end
 
-  # # class ClassName:
-  # defp postprocess_helper([
-  #        {:name, attrs1, text1},
-  #        {:whitespace, _, _} = ws1,
-  #        {:name, _, _text2} = param,
-  #        {:punctuation, _, _} = p
-  #        | tokens
-  #      ])
-  #      when text1 == "class" do
-  #   [{:keyword_declaration, attrs1, text1}, ws1, param, p | postprocess_helper(tokens)]
-  # end
+  defp postprocess_helper([
+         {:name, attrs1, text1},
+         {:whitespace, _, _} = ws,
+         {:name, attrs2, text2} | tokens
+       ])
+       when text1 == "class" do
+    [
+      {:keyword_declaration, attrs1, text1},
+      ws,
+      {:name_class, attrs2, text2} | postprocess_helper(tokens)
+    ]
+  end
 
   # @staticmethod
   defp postprocess_helper([{:string_symbol, attrs, [text1, _text2] = decorator} | tokens]) when text1 == "@" do
@@ -311,6 +585,22 @@ defmodule Makeup.Lexers.PythonLexer do
     [{:keyword, attrs, text} | postprocess_helper(tokens)]
   end
 
+  defp postprocess_helper([{:name, attrs, text} | tokens]) when text in @exceptions do
+    [{:name_exception, attrs, text} | postprocess_helper(tokens)]
+  end
+
+  defp postprocess_helper([{:name, attrs, text} | tokens]) when text in @builtins do
+    [{:name_builtin, attrs, text} | postprocess_helper(tokens)]
+  end
+
+  defp postprocess_helper([{:name, attrs, text} | tokens]) when text in @magic_funcs do
+    [{:name_function_magic, attrs, text} | postprocess_helper(tokens)]
+  end
+
+  defp postprocess_helper([{:name, attrs, text} | tokens]) when text in @magic_vars do
+    [{:name_variable_magic, attrs, text} | postprocess_helper(tokens)]
+  end
+
   defp postprocess_helper([{:name, attrs, text} | tokens]) when text in @keyword_declaration do
     [{:keyword_declaration, attrs, text} | postprocess_helper(tokens)]
   end
@@ -319,20 +609,31 @@ defmodule Makeup.Lexers.PythonLexer do
     [{:operator_word, attrs, text} | postprocess_helper(tokens)]
   end
 
-  defp postprocess_helper([{:name, attrs, text} | tokens]) when text in @keyword_namespace do
-    [{:keyword_namespace, attrs, text} | postprocess_helper(tokens)]
+  defp postprocess_helper([
+    {:name, attrs, text},
+    {:whitespace, _, _} = ws,
+    {:name, attrs2, text2} | tokens]) when text in @keyword_namespace do
+
+    [
+      {:keyword_namespace, attrs, text},
+      ws,
+      {:name, attrs2, text2} | postprocess_helper(tokens)
+    ]
   end
 
-  defp postprocess_helper([{:name, attrs, text} | tokens]) when text in @name_constant do
-    [{:name_constant, attrs, text} | postprocess_helper(tokens)]
+  defp postprocess_helper([{:name, attrs, text} | tokens]) when text in @keyword_constant do
+    [{:keyword_constant, attrs, text} | postprocess_helper(tokens)]
   end
 
   # Unused variables
-  defp postprocess_helper([{:name, attrs, "_" <> _name = text} | tokens]),
-    do: [{:comment, attrs, text} | postprocess_helper(tokens)]
+  defp postprocess_helper([{:name, attrs, "_" <> _name = text} | tokens]) do
+    [{:comment, attrs, text} | postprocess_helper(tokens)]
+  end
 
   # Otherwise, don't do anything with the current token and go to the next token.
-  defp postprocess_helper([token | tokens]), do: [token | postprocess_helper(tokens)]
+  defp postprocess_helper([token | tokens]) do
+    [token | postprocess_helper(tokens)]
+  end
 
   # Public API
   @impl Makeup.Lexer
