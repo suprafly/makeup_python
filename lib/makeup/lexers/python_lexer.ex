@@ -1,6 +1,8 @@
 defmodule Makeup.Lexers.PythonLexer do
   @moduledoc """
   A `Makeup` lexer for the Python language.
+
+  This lexers handles Python 3. For Python 2.x another lexer will be used.
   """
 
   import NimbleParsec
@@ -657,7 +659,7 @@ defmodule Makeup.Lexers.PythonLexer do
       open: [[{:punctuation, %{language: :c}, "{"}]],
       close: [[{:punctuation, %{language: :c}, "}"}]]
     ]
-    # percent_string_interpolation: [
+     # percent_string_interpolation: [
     #   open: [[{:punctuation, %{language: :c}, "%("}]],
     #   close: [[{:punctuation, %{language: :c}, ")"}]]
     # ],
