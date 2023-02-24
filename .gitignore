@@ -26,3 +26,5 @@ makeup_python-*.tar
 /tmp/
 
 .iex.exs
+
+priv/
