@@ -69,11 +69,6 @@ defmodule Makeup.Lexers.PythonLexer do
     |> lexeme()
     |> token(:name)
 
-  decorator =
-    string("@")
-    |> ascii_string([?0..?9, ?a..?z, ?A..?Z], min: 1)
-    |> token(:string_symbol)
-
   # %-formatting
   # "%s %s" %('Hello','World',)
   percent_string_interp = string_like("%(", ")", [variable], :string_interpol)
@@ -133,13 +128,28 @@ defmodule Makeup.Lexers.PythonLexer do
     |> concat(ascii_string([?0..?9, ?a..?f, ?A..?F], min: 1))
     |> token(:number_hex)
 
+  decorator_line =
+    choice([
+      ascii_char([?\n]),
+      ascii_char([40])
+      ])
+    |> lookahead_not()
+    |> utf8_string([], 1)
+    |> repeat()
+
+  decorator =
+    string("@")
+    |> concat(decorator_line)
+    |> token(:name_decorator)
+
   # Python3 has ellipsis: ...
+  # and matrix mult: @
   operator =
     ~W(
         + - * / % ** //
         == != < > <= >= <>
         = += -= *= /= %= **= //=
-        & | ^ ~ << >> ...
+        & | ^ ~ << >> ... @
       )
     |> word_from_list()
     |> token(:operator)
@@ -190,6 +200,9 @@ defmodule Makeup.Lexers.PythonLexer do
         ] ++
         delimiter_pairs ++
         [
+          # Decorator needs to come before Operators, because @ is also used for matrix multiplication
+          decorator,
+
           # Operators
           operator,
 
@@ -243,7 +256,7 @@ defmodule Makeup.Lexers.PythonLexer do
   # # Step #2: postprocess the list of tokens
   # ###################################################################
 
-  @keyword [
+  @keywords [
     "assert",
     "async for",
     "async",
@@ -339,6 +352,13 @@ defmodule Makeup.Lexers.PythonLexer do
     "type",
     "vars",
     "zip"
+  ]
+
+  @builtin_pseudos [
+    "self",
+    "Ellipsis",
+    "NotImplemented",
+    "cls"
   ]
 
   @exceptions [
@@ -558,6 +578,7 @@ defmodule Makeup.Lexers.PythonLexer do
          {:name, attrs2, text2} | tokens
        ])
        when text1 == "class" do
+
     [
       {:keyword_declaration, attrs1, text1},
       ws,
@@ -565,30 +586,82 @@ defmodule Makeup.Lexers.PythonLexer do
     ]
   end
 
-  # @staticmethod
-  defp postprocess_helper([{:string_symbol, attrs, [text1, _text2] = decorator} | tokens]) when text1 == "@" do
-    # todo - not clear what token we should use, so I am guessing...
-    [{:name_tag, attrs, decorator} | postprocess_helper(tokens)]
+  defp postprocess_helper([
+    {:name_decorator, attrs, [text1, _text2] = decorator},
+    {next_token, _, _} = t2 | tokens]) when text1 == "@" and next_token != :whitespace do
+
+    [{:name_decorator, attrs, decorator} | postprocess_helper([t2 | tokens])]
   end
 
-  defp postprocess_helper([{:name, attrs, text} | tokens]) when text in @keyword do
-    [{:keyword, attrs, text} | postprocess_helper(tokens)]
+  # suffix=r'\b'
+  defp postprocess_helper([
+    {:name, attrs, text},
+    {:whitespace, _, _} = ws
+    | tokens]) when text in @keywords do
+
+    [
+      {:keyword, attrs, text},
+      ws | postprocess_helper(tokens)
+    ]
   end
 
-  defp postprocess_helper([{:name, attrs, text} | tokens]) when text in @exceptions do
-    [{:name_exception, attrs, text} | postprocess_helper(tokens)]
+  defp postprocess_helper([
+    {:name, attrs, text},
+    {:whitespace, _, _} = ws
+    | tokens]) when text in @exceptions do
+
+    [
+      {:name_exception, attrs, text},
+      ws | postprocess_helper(tokens)
+    ]
   end
 
-  defp postprocess_helper([{:name, attrs, text} | tokens]) when text in @builtins do
-    [{:name_builtin, attrs, text} | postprocess_helper(tokens)]
+  # prefix: r'(?<!\.)'
+  # suffix=r'\b'
+  defp postprocess_helper([
+    {:name, attrs, text},
+    {:whitespace, _, _} = ws
+    | tokens]) when text in @builtin_pseudos do
+
+    [
+      {:name_builtin_pseudo, attrs, text},
+      ws | postprocess_helper(tokens)
+    ]
   end
 
-  defp postprocess_helper([{:name, attrs, text} | tokens]) when text in @magic_funcs do
-    [{:name_function_magic, attrs, text} | postprocess_helper(tokens)]
+  defp postprocess_helper([
+    {:name, attrs, text},
+    {:whitespace, _, _} = ws
+    | tokens]) when text in @builtins do
+
+    [
+      {:name_builtin, attrs, text},
+      ws | postprocess_helper(tokens)
+    ]
   end
 
-  defp postprocess_helper([{:name, attrs, text} | tokens]) when text in @magic_vars do
-    [{:name_variable_magic, attrs, text} | postprocess_helper(tokens)]
+  # suffix=r'\b'
+  defp postprocess_helper([
+    {:name, attrs, text},
+    {:whitespace, _, _} = ws
+    | tokens]) when text in @magic_funcs do
+
+    [
+      {:name_function_magic, attrs, text},
+      ws | postprocess_helper(tokens)
+    ]
+  end
+
+  # suffix=r'\b'
+  defp postprocess_helper([
+    {:name, attrs, text},
+    {:whitespace, _, _} = ws
+    | tokens]) when text in @magic_vars do
+
+    [
+      {:name_variable_magic, attrs, text},
+      ws | postprocess_helper(tokens)
+    ]
   end
 
   defp postprocess_helper([{:name, attrs, text} | tokens]) when text in @operator_word do
