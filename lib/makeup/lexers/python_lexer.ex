@@ -25,7 +25,6 @@ defmodule Makeup.Lexers.PythonLexer do
   # # Why this convention? Tokens can't be composed further, while raw strings can.
   # # This way, we immediately know which of the combinators we can compose.
 
-
   whitespace = ascii_string([?\r, ?\s, ?\n, ?\f, ?\t], min: 1) |> token(:whitespace)
 
   newlines =
@@ -64,7 +63,7 @@ defmodule Makeup.Lexers.PythonLexer do
     |> token(:string_escape)
 
   variable =
-    ascii_string([?a..?z, ?A..?Z, ?_,], 1)
+    ascii_string([?a..?z, ?A..?Z, ?_], 1)
     |> optional(ascii_string([?a..?z, ?_, ?0..?9, ?A..?Z], min: 1))
     |> lexeme()
     |> token(:name)
@@ -76,7 +75,7 @@ defmodule Makeup.Lexers.PythonLexer do
   combinators_inside_string = [
     percent_string_interp,
     unicode_char_in_string,
-    escaped_char,
+    escaped_char
   ]
 
   single_quoted_heredocs = string_like("'''", "'''", combinators_inside_string, :string_doc)
@@ -89,11 +88,13 @@ defmodule Makeup.Lexers.PythonLexer do
   f_string_interp_choices = [
     inner_f_string_interp,
     unicode_char_in_string,
-    escaped_char,
+    escaped_char
   ]
 
   single_quoted_f_string_interpolation = string_like("f'", "'", f_string_interp_choices, :string)
-  double_quoted_f_string_interpolation = string_like(~S[f"], ~S["], f_string_interp_choices, :string)
+
+  double_quoted_f_string_interpolation =
+    string_like(~S[f"], ~S["], f_string_interp_choices, :string)
 
   single_quoted_string = string_like("'", "'", combinators_inside_string, :string)
   double_quoted_string = string_like("\"", "\"", combinators_inside_string, :string)
@@ -132,7 +133,7 @@ defmodule Makeup.Lexers.PythonLexer do
     choice([
       ascii_char([?\n]),
       ascii_char([40])
-      ])
+    ])
     |> lookahead_not()
     |> utf8_string([], 1)
     |> repeat()
@@ -156,8 +157,16 @@ defmodule Makeup.Lexers.PythonLexer do
 
   punctuation =
     [
-      ":", ";", ",", ".", "%",
-      "'", "\"", "#", "\\", "@"
+      ":",
+      ";",
+      ",",
+      ".",
+      "%",
+      "'",
+      "\"",
+      "#",
+      "\\",
+      "@"
     ]
     |> word_from_list()
     |> token(:punctuation)
@@ -168,7 +177,7 @@ defmodule Makeup.Lexers.PythonLexer do
     |> token(:punctuation)
 
   delimiter_pairs = [
-    delimiters_punctuation,
+    delimiters_punctuation
   ]
 
   # This does the work of parsing
@@ -181,16 +190,14 @@ defmodule Makeup.Lexers.PythonLexer do
         # Comments
         hashbang_comment,
         inline_comment,
-
         single_quoted_heredocs,
         double_quoted_heredocs,
-
         single_quoted_string,
         double_quoted_string,
 
         # String interpolation
         single_quoted_f_string_interpolation,
-        double_quoted_f_string_interpolation,
+        double_quoted_f_string_interpolation
       ] ++
         [
           # Floats must come before integers
@@ -214,7 +221,6 @@ defmodule Makeup.Lexers.PythonLexer do
 
           # Names
           variable,
-
           decorator,
           punctuation,
           # If we can't parse any of the above, we highlight the next character as an error
@@ -578,7 +584,6 @@ defmodule Makeup.Lexers.PythonLexer do
          {:name, attrs2, text2} | tokens
        ])
        when text1 == "class" do
-
     [
       {:keyword_declaration, attrs1, text1},
       ws,
@@ -587,18 +592,20 @@ defmodule Makeup.Lexers.PythonLexer do
   end
 
   defp postprocess_helper([
-    {:name_decorator, attrs, [text1, _text2] = decorator},
-    {next_token, _, _} = t2 | tokens]) when text1 == "@" and next_token != :whitespace do
-
+         {:name_decorator, attrs, [text1, _text2] = decorator},
+         {next_token, _, _} = t2 | tokens
+       ])
+       when text1 == "@" and next_token != :whitespace do
     [{:name_decorator, attrs, decorator} | postprocess_helper([t2 | tokens])]
   end
 
   # suffix=r'\b'
   defp postprocess_helper([
-    {:name, attrs, text},
-    {:whitespace, _, _} = ws
-    | tokens]) when text in @keywords do
-
+         {:name, attrs, text},
+         {:whitespace, _, _} = ws
+         | tokens
+       ])
+       when text in @keywords do
     [
       {:keyword, attrs, text},
       ws | postprocess_helper(tokens)
@@ -606,10 +613,11 @@ defmodule Makeup.Lexers.PythonLexer do
   end
 
   defp postprocess_helper([
-    {:name, attrs, text},
-    {:whitespace, _, _} = ws
-    | tokens]) when text in @exceptions do
-
+         {:name, attrs, text},
+         {:whitespace, _, _} = ws
+         | tokens
+       ])
+       when text in @exceptions do
     [
       {:name_exception, attrs, text},
       ws | postprocess_helper(tokens)
@@ -619,10 +627,11 @@ defmodule Makeup.Lexers.PythonLexer do
   # prefix: r'(?<!\.)'
   # suffix=r'\b'
   defp postprocess_helper([
-    {:name, attrs, text},
-    {:whitespace, _, _} = ws
-    | tokens]) when text in @builtin_pseudos do
-
+         {:name, attrs, text},
+         {:whitespace, _, _} = ws
+         | tokens
+       ])
+       when text in @builtin_pseudos do
     [
       {:name_builtin_pseudo, attrs, text},
       ws | postprocess_helper(tokens)
@@ -630,10 +639,11 @@ defmodule Makeup.Lexers.PythonLexer do
   end
 
   defp postprocess_helper([
-    {:name, attrs, text},
-    {:whitespace, _, _} = ws
-    | tokens]) when text in @builtins do
-
+         {:name, attrs, text},
+         {:whitespace, _, _} = ws
+         | tokens
+       ])
+       when text in @builtins do
     [
       {:name_builtin, attrs, text},
       ws | postprocess_helper(tokens)
@@ -642,10 +652,11 @@ defmodule Makeup.Lexers.PythonLexer do
 
   # suffix=r'\b'
   defp postprocess_helper([
-    {:name, attrs, text},
-    {:whitespace, _, _} = ws
-    | tokens]) when text in @magic_funcs do
-
+         {:name, attrs, text},
+         {:whitespace, _, _} = ws
+         | tokens
+       ])
+       when text in @magic_funcs do
     [
       {:name_function_magic, attrs, text},
       ws | postprocess_helper(tokens)
@@ -654,10 +665,11 @@ defmodule Makeup.Lexers.PythonLexer do
 
   # suffix=r'\b'
   defp postprocess_helper([
-    {:name, attrs, text},
-    {:whitespace, _, _} = ws
-    | tokens]) when text in @magic_vars do
-
+         {:name, attrs, text},
+         {:whitespace, _, _} = ws
+         | tokens
+       ])
+       when text in @magic_vars do
     [
       {:name_variable_magic, attrs, text},
       ws | postprocess_helper(tokens)
@@ -669,10 +681,11 @@ defmodule Makeup.Lexers.PythonLexer do
   end
 
   defp postprocess_helper([
-    {:name, attrs, text},
-    {:whitespace, _, _} = ws,
-    {:name, attrs2, text2} | tokens]) when text in @keyword_namespace do
-
+         {:name, attrs, text},
+         {:whitespace, _, _} = ws,
+         {:name, attrs2, text2} | tokens
+       ])
+       when text in @keyword_namespace do
     [
       {:keyword_namespace, attrs, text},
       ws,
@@ -716,7 +729,7 @@ defmodule Makeup.Lexers.PythonLexer do
       open: [[{:punctuation, %{language: :c}, "{"}]],
       close: [[{:punctuation, %{language: :c}, "}"}]]
     ]
-     # percent_string_interpolation: [
+    # percent_string_interpolation: [
     #   open: [[{:punctuation, %{language: :c}, "%("}]],
     #   close: [[{:punctuation, %{language: :c}, ")"}]]
     # ],

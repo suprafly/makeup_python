@@ -23,7 +23,7 @@ defmodule MakeupPython.MixProject do
   defp deps do
     [
       {:makeup, "~> 1.0"},
-      {:nimble_parsec, "~> 1.2.3"},
+      {:nimble_parsec, "~> 1.2.3"}
     ]
   end
 end
