@@ -718,25 +718,33 @@ defmodule Makeup.Lexers.PythonLexer do
   @impl Makeup.Lexer
   defgroupmatcher(:match_groups,
     parentheses: [
-      open: [[{:punctuation, %{language: :c}, "("}]],
-      close: [[{:punctuation, %{language: :c}, ")"}]]
+      open: [[{:punctuation, %{language: :python}, "("}]],
+      close: [[{:punctuation, %{language: :python}, ")"}]]
     ],
     array: [
-      open: [[{:punctuation, %{language: :c}, "["}]],
+      open: [[{:punctuation, %{language: :python}, "["}]],
       close: [[{:punctuation, %{language: :c}, "]"}]]
     ],
     brackets: [
-      open: [[{:punctuation, %{language: :c}, "{"}]],
-      close: [[{:punctuation, %{language: :c}, "}"}]]
+      open: [[{:punctuation, %{language: :python}, "{"}]],
+      close: [[{:punctuation, %{language: :python}, "}"}]]
+    ],
+    percent_interpolation: [
+      open: [
+        [{:string_interpol, %{language: :python}, "%("}]
+      ],
+      close: [
+        [{:string_interpol, %{language: :python}, ")"}]
+      ]
+    ],
+    f_string_interpolation: [
+      open: [
+        [{:string_interpol, %{language: :python}, "f'"}]
+      ],
+      close: [
+        [{:string_interpol, %{language: :python}, "'"}]
+      ]
     ]
-    # percent_string_interpolation: [
-    #   open: [[{:punctuation, %{language: :c}, "%("}]],
-    #   close: [[{:punctuation, %{language: :c}, ")"}]]
-    # ],
-    # f_string_interpolation: [
-    #   open: [[{:punctuation, %{language: :c}, "f'"}]],
-    #   close: [[{:punctuation, %{language: :c}, "'"}]]
-    # ],
   )
 
   defp remove_initial_newline([{ttype, meta, text} | tokens]) do
