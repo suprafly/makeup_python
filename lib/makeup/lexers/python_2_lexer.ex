@@ -1,13 +1,41 @@
-defmodule Makeup.Lexers.PythonLexer do
+defmodule Makeup.Lexers.Python2Lexer do
   @moduledoc """
-  A `Makeup` lexer for the Python language.
-
-  This lexers handles Python 3.x code.
+  A `Makeup` lexer for the Python 2.x language.
   """
 
   import NimbleParsec
   import Makeup.Lexer.Combinators
   import Makeup.Lexer.Groups
+
+
+  # TODO:
+  # - remove f strings
+
+  # - add backticks:
+  #      ('`.*?`', String.Backtick)
+
+  # - only string escape:
+  #      'stringescape': [
+  #          (r'\\([\\abfnrtv"\']|\n|N\{.*?\}|u[a-fA-F0-9]{4}|'
+  #           r'U[a-fA-F0-9]{8}|x[a-fA-F0-9]{2}|[0-7]{1,3})', String.Escape)
+  #      ],
+
+  # - check numbers:
+  #      'numbers': [
+  #          (r'(\d+\.\d*|\d*\.\d+)([eE][+-]?[0-9]+)?j?', Number.Float),
+  #          (r'\d+[eE][+-]?[0-9]+j?', Number.Float),
+  #          (r'0[0-7]+j?', Number.Oct),
+  #          (r'0[bB][01]+', Number.Bin),
+  #          (r'0[xX][a-fA-F0-9]+', Number.Hex),
+  #          (r'\d+L', Number.Integer.Long),
+  #          (r'\d+j?', Number.Integer)
+  #      ],
+
+  # - Simpler punctuation
+
+  # - Check operators
+
+  # - Update all keywords, etc...
 
   @behaviour Makeup.Lexer
 
@@ -67,15 +95,6 @@ defmodule Makeup.Lexers.PythonLexer do
     |> lexeme()
     |> token(:name)
 
-  fromimport =
-    string("from")
-    |> ascii_string([?\s, ?\t], min: 1)
-    |> ascii_string([?a..?z, ?A..?Z, ?_, ?0..?9, ?.], min: 1)
-    |> repeat()
-    |> ascii_string([?\s, ?\t], min: 1)
-    |> lookahead(string("import"))
-    |> token(:name)
-
   # %-formatting
   # "%s %s" %('Hello','World',)
   percent_string_interp = string_like("%(", ")", [variable], :string_interpol)
@@ -116,7 +135,7 @@ defmodule Makeup.Lexers.PythonLexer do
 
   # floats can start with a "." and no integer part
   number_float =
-    ascii_string([?0..?9, ?\s, ?\n, ?\f, ?\r, ?\t], min: 1)
+    ascii_string([?0..?9], min: 0)
     |> string(".")
     |> concat(ascii_string([?0..?9], min: 0))
     |> optional(float_scientific_notation)
@@ -153,14 +172,12 @@ defmodule Makeup.Lexers.PythonLexer do
 
   # Python3 has ellipsis: ...
   # and matrix mult: @
-
   operator =
     ~W(
         + - * / % ** //
         == != < > <= >= <>
-        = += -= *= /= %= **= //= :=
+        = += -= *= /= %= **= //=
         & | ^ ~ << >> ... @
-        .
       )
     |> word_from_list()
     |> token(:operator)
@@ -182,7 +199,7 @@ defmodule Makeup.Lexers.PythonLexer do
     |> token(:punctuation)
 
   delimiters_punctuation =
-    ~W(( \) [ ] { } , : ` ;)
+    ~W(( \) [ ] { } , : . ` ;)
     |> word_from_list()
     |> token(:punctuation)
 
@@ -194,11 +211,6 @@ defmodule Makeup.Lexers.PythonLexer do
   root_element_combinator =
     choice(
       [
-        # Floats must come before integers and before punctuation, because a float can
-        # start with a ".". They must also come before white space because a float
-        # can be missing the mantissa, ex: .7
-        number_float,
-
         newlines,
         whitespace,
 
@@ -215,16 +227,19 @@ defmodule Makeup.Lexers.PythonLexer do
         double_quoted_f_string_interpolation
       ] ++
         [
-          # Decorator needs to come before Operators, because @ is also used for matrix multiplication
-          decorator,
-
-          fromimport,
-
-          # Operators
-          operator,
+          # Floats must come before integers
+          # and before punctuation, because a float can
+          # start with a "."
+          number_float
         ] ++
         delimiter_pairs ++
         [
+          # Decorator needs to come before Operators, because @ is also used for matrix multiplication
+          decorator,
+
+          # Operators
+          operator,
+
           # Numbers
           number_bin,
           number_oct,
@@ -626,17 +641,6 @@ defmodule Makeup.Lexers.PythonLexer do
 
   defp postprocess_helper([
          {:name, attrs, text},
-         {:punctuation, _, text2} = p
-         | tokens
-       ])
-       when text in @keywords and text2 in ["(", ":"] do
-    [
-      {:keyword, attrs, text}, p | postprocess_helper(tokens)
-    ]
-  end
-
-  defp postprocess_helper([
-         {:name, attrs, text},
          {:whitespace, _, _} = ws
          | tokens
        ])
@@ -704,66 +708,6 @@ defmodule Makeup.Lexers.PythonLexer do
   end
 
   defp postprocess_helper([
-         {:name, attrs, [text | rem_text]} | tokens
-       ])
-       when text in @keyword_namespace do
-
-    [ws1 | rem_text] = rem_text
-    {ws2, rem_text} = List.pop_at(rem_text, -1)
-
-    # We want to parse 'import' properly, so add the whitespace and continue
-    tokens = [{:whitespace, attrs, ws2} | tokens]
-
-    [
-      {:keyword_namespace, attrs, text},
-      {:whitespace, attrs, ws1},
-      {:name, attrs, rem_text}
-       | postprocess_helper(tokens)
-    ]
-  end
-
-  defp postprocess_helper([
-         {:name, attrs, text},
-         {:whitespace, _, _} = ws,
-         {:name, attrs2, text2} | tokens
-       ])
-       when text in @keyword_namespace do
-    [
-      {:keyword_namespace, attrs, text},
-      ws,
-      {:name, attrs2, text2} | postprocess_helper(tokens)
-    ]
-  end
-
-
-  defp postprocess_helper([
-         {:name, attrs, text},
-         {:whitespace, _, _} = ws,
-         {:operator, attrs2, "*"} | tokens
-       ])
-       when text in @keyword_namespace do
-    [
-      {:keyword_namespace, attrs, text},
-      ws,
-      {:operator, attrs2, "*"} | postprocess_helper(tokens)
-    ]
-  end
-
-  # defp postprocess_helper([
-  #        {:name, attrs, text},
-  #        {:whitespace, _, _} = ws,
-  #        {:name, attrs2, text2},
-  #        {:whitespace, _, _} = ws2,
-  #        {:name, attrs3, text3}
-  #        | tokens
-  #      ])
-  #      when text == "from" and text3 == "import" do
-  #   [
-  #     {:keyword_namespace, attrs, text}, ws, {:name, attrs2, text2}, ws2, {:keyword_namespace, attrs3, text3} | postprocess_helper(tokens)
-  #   ]
-  # end
-
-  defp postprocess_helper([
          {:name, attrs, text},
          {:whitespace, _, _} = ws,
          {:name, attrs2, text2} | tokens
@@ -793,7 +737,6 @@ defmodule Makeup.Lexers.PythonLexer do
   # Public API
   @impl Makeup.Lexer
   def postprocess(tokens, _opts \\ []), do: postprocess_helper(tokens)
-    # |> IO.inspect(limit: :infinity, pretty: true) # for debugging
 
   # ###################################################################
   # # Step #3: highlight matching delimiters
