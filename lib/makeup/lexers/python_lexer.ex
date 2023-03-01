@@ -14,7 +14,21 @@ defmodule Makeup.Lexers.PythonLexer do
             include('bytesescape')
         ],
 
-    - match / case
+    - match / case:
+        'soft-keywords': [
+            # `match`, `case` and `_` soft keywords
+            (r'(^[ \t]*)'              # at beginning of line + possible indentation
+             r'(match|case)\b'         # a possible keyword
+             r'(?![ \t]*(?:'           # not followed by...
+             r'[:,;=^&|@~)\]}]|(?:' +  # characters and keywords that mean this isn't
+             r'|'.join(keyword.kwlist) + r')\b))',                 # pattern matching
+             bygroups(Text, Keyword), 'soft-keywords-inner'),
+        ],
+        'soft-keywords-inner': [
+            # optional `_` keyword
+            (r'(\s+)([^\n_]*)(_\b)', bygroups(Whitespace, using(this), Keyword)),
+            default('#pop')
+        ],
   """
 
   import NimbleParsec
@@ -147,7 +161,10 @@ defmodule Makeup.Lexers.PythonLexer do
   single_quoted_string = string_like("'", "'", combinators_inside_string, :string) # |> lookahead(string("\n"))
   double_quoted_string = string_like("\"", "\"", combinators_inside_string, :string) # |> lookahead(string("\n"))
 
-  number_integer = ascii_string([?0..?9], min: 1) |> token(:number_integer)
+  number_integer =
+    ascii_char([?0..?9])
+    |> ascii_string([?0..?9, ?_], min: 0)
+    |> token(:number_integer)
 
   float_scientific_notation =
     ascii_string([?e, ?E], 1)
@@ -158,23 +175,23 @@ defmodule Makeup.Lexers.PythonLexer do
   number_float =
     ascii_string([?0..?9, ?\s, ?\n, ?\f, ?\r, ?\t], min: 1)
     |> string(".")
-    |> concat(ascii_string([?0..?9], min: 0))
+    |> concat(ascii_string([?0..?9, ?_], min: 0))
     |> optional(float_scientific_notation)
     |> token(:number_float)
 
   number_bin =
     string("0b")
-    |> concat(ascii_string([?0..?1], min: 1))
+    |> concat(ascii_string([?0..?1, ?_], min: 1))
     |> token(:number_bin)
 
   number_oct =
-    string("0c")
-    |> concat(ascii_string([?0..?7], min: 1))
+    string("0o")
+    |> concat(ascii_string([?0..?7, ?_], min: 1))
     |> token(:number_oct)
 
   number_hex =
     string("0x")
-    |> concat(ascii_string([?0..?9, ?a..?f, ?A..?F], min: 1))
+    |> concat(ascii_string([?0..?9, ?a..?f, ?A..?F, ?_], min: 1))
     |> token(:number_hex)
 
   decorator_line =
@@ -187,7 +204,9 @@ defmodule Makeup.Lexers.PythonLexer do
     |> repeat()
 
   decorator =
-    string("@")
+    ascii_char([?\r, ?\n, ?\f])
+    |> ascii_string([?\r, ?\s, ?\n, ?\f, ?\t], min: 0)
+    |> string("@")
     |> concat(decorator_line)
     |> token(:name_decorator)
 
@@ -239,6 +258,9 @@ defmodule Makeup.Lexers.PythonLexer do
         # can be missing the mantissa, ex: .7
         number_float,
 
+        # Decorator needs to come before Operators, because @ is also used for matrix multiplication
+        decorator,
+
         newlines,
         whitespace,
 
@@ -259,9 +281,6 @@ defmodule Makeup.Lexers.PythonLexer do
         double_quoted_f_string_interpolation
       ] ++
         [
-          # Decorator needs to come before Operators, because @ is also used for matrix multiplication
-          decorator,
-
           fromimport,
 
           # Operators
