@@ -3,6 +3,18 @@ defmodule Makeup.Lexers.PythonLexer do
   A `Makeup` lexer for the Python language.
 
   This lexers handles Python 3.x code.
+
+  TODO:
+
+        'bytesescape': [
+            (r'\\([\\abfnrtv"\']|\n|x[a-fA-F0-9]{2}|[0-7]{1,3})', String.Escape)
+        ],
+        'stringescape': [
+            (r'\\(N\{.*?\}|u[a-fA-F0-9]{4}|U[a-fA-F0-9]{8})', String.Escape),
+            include('bytesescape')
+        ],
+
+    - match / case
   """
 
   import NimbleParsec
@@ -76,6 +88,34 @@ defmodule Makeup.Lexers.PythonLexer do
     |> lookahead(string("import"))
     |> token(:name)
 
+  single_quoted_heredoc_affix =
+    ascii_string([?\s, ?\t, ?\n, ?\r, ?\f], min: 0)
+    |> ascii_char([?r, ?R, ?u, ?U, ?b, ?B])
+    |> times(min: 1, max: 2)
+    |> lookahead(string("'''"))
+    |> token(:string_affix)
+
+  double_quoted_heredoc_affix =
+    ascii_string([?\s, ?\t, ?\n, ?\r, ?\f], min: 0)
+    |> ascii_char([?r, ?R, ?u, ?U, ?b, ?B])
+    |> times(min: 1, max: 2)
+    |> lookahead(string(~S["""]))
+    |> token(:string_affix)
+
+  single_quoted_string_affix =
+    ascii_string([?\s, ?\t, ?\n, ?\r, ?\f], min: 0)
+    |> ascii_char([?r, ?R, ?u, ?U, ?b, ?B])
+    |> times(min: 1, max: 2)
+    |> lookahead(string("'"))
+    |> token(:string_affix)
+
+  double_quoted_string_affix =
+    ascii_string([?\s, ?\t, ?\n, ?\r, ?\f], min: 0)
+    |> ascii_char([?r, ?R, ?u, ?U, ?b, ?B])
+    |> times(min: 1, max: 2)
+    |> lookahead(string("\""))
+    |> token(:string_affix)
+
   # %-formatting
   # "%s %s" %('Hello','World',)
   percent_string_interp = string_like("%(", ")", [variable], :string_interpol)
@@ -104,8 +144,8 @@ defmodule Makeup.Lexers.PythonLexer do
   double_quoted_f_string_interpolation =
     string_like(~S[f"], ~S["], f_string_interp_choices, :string)
 
-  single_quoted_string = string_like("'", "'", combinators_inside_string, :string)
-  double_quoted_string = string_like("\"", "\"", combinators_inside_string, :string)
+  single_quoted_string = string_like("'", "'", combinators_inside_string, :string) # |> lookahead(string("\n"))
+  double_quoted_string = string_like("\"", "\"", combinators_inside_string, :string) # |> lookahead(string("\n"))
 
   number_integer = ascii_string([?0..?9], min: 1) |> token(:number_integer)
 
@@ -205,6 +245,10 @@ defmodule Makeup.Lexers.PythonLexer do
         # Comments
         hashbang_comment,
         inline_comment,
+        single_quoted_string_affix,
+        double_quoted_string_affix,
+        single_quoted_heredoc_affix,
+        double_quoted_heredoc_affix,
         single_quoted_heredocs,
         double_quoted_heredocs,
         single_quoted_string,
