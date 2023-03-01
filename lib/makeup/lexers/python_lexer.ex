@@ -169,15 +169,40 @@ defmodule Makeup.Lexers.PythonLexer do
   float_scientific_notation =
     ascii_string([?e, ?E], 1)
     |> optional(choice([string("-"), string("+")]))
-    |> concat(number_integer)
+    |> concat(ascii_char([?0..?9]) |> ascii_string([?0..?9, ?_], min: 0))
+
+  float_exponent =
+    ascii_char([?0..?9])
+    |> ascii_string([?0..?9, ?_], min: 0)
+    |> lookahead_not(string("_e"))
 
   # floats can start with a "." and no integer part
   number_float =
-    ascii_string([?0..?9, ?\s, ?\n, ?\f, ?\r, ?\t], min: 1)
+    # ascii_string([?0..?9, ?\s, ?\n, ?\f, ?\r, ?\t], min: 1)
+    optional(ascii_char([?0..?9]))
+    |> optional(ascii_string([?0..?9, ?_], min: 0))
     |> string(".")
-    |> concat(ascii_string([?0..?9, ?_], min: 0))
+    |> concat(optional(float_exponent))
     |> optional(float_scientific_notation)
+    |> optional(ascii_char([?j, ?J]))
     |> token(:number_float)
+
+  number_float_no_decimal =
+    ascii_char([?0..?9])
+    |> optional(ascii_string([?0..?9, ?_], min: 0))
+    |> ascii_string([?e, ?E], 1)
+    |> optional(choice([string("-"), string("+")]))
+    |> ascii_char([?0..?9])
+    |> optional(ascii_string([?0..?9, ?_], min: 0))
+    |> optional(ascii_char([?j, ?J]))
+    |> token(:number_float)
+
+  # number_float_no_decimal =
+  #   ascii_string([?0..?9, ?\s, ?\n, ?\f, ?\r, ?\t], min: 1)
+  #   |> ascii_string([?0..?9, ?_], min: 0)
+  #   |> optional(float_scientific_notation)
+  #   |> optional(ascii_char([?j, ?J]))
+  #   |> token(:number_float)
 
   number_bin =
     string("0b")
@@ -257,6 +282,7 @@ defmodule Makeup.Lexers.PythonLexer do
         # start with a ".". They must also come before white space because a float
         # can be missing the mantissa, ex: .7
         number_float,
+        number_float_no_decimal,
 
         # Decorator needs to come before Operators, because @ is also used for matrix multiplication
         decorator,
@@ -843,14 +869,78 @@ defmodule Makeup.Lexers.PythonLexer do
     [{:keyword_constant, attrs, text} | postprocess_helper(tokens)]
   end
 
+  defp postprocess_helper([{:number_integer, attrs, text} | tokens]) when is_list(text) do
+    split_underscores(:number_integer, attrs, text, tokens)
+  end
+
+  defp postprocess_helper([{:number_float, attrs, text} | tokens]) when is_list(text) do
+    split_underscores(:number_float, attrs, text, tokens)
+  end
+
+  defp postprocess_helper([{:number_bin, attrs, text} | tokens]) when is_list(text) do
+    split_underscores(:number_bin, attrs, text, tokens)
+  end
+
+  defp postprocess_helper([{:number_oct, attrs, text} | tokens]) when is_list(text) do
+    split_underscores(:number_oct, attrs, text, tokens)
+  end
+
+  defp postprocess_helper([{:number_hex, attrs, text} | tokens]) when is_list(text) do
+    split_underscores(:number_hex, attrs, text, tokens)
+  end
+
+  defp postprocess_helper([{:comment_single, attrs, text} | tokens]) do
+    [{:comment_single, attrs, Enum.join(text)} | postprocess_helper(tokens)]
+  end
+
+  defp postprocess_helper([{:comment_hashbang, attrs, text} | tokens]) do
+    [{:comment_hashbang, attrs, Enum.join(text)} | postprocess_helper(tokens)]
+  end
+
+  defp postprocess_helper([{:string_doc, attrs, text} | tokens]) do
+    [{:string_doc, attrs, to_string(text)} | postprocess_helper(tokens)]
+  end
+
   # Unused variables
   defp postprocess_helper([{:name, attrs, "_" <> _name = text} | tokens]) do
-    [{:comment, attrs, text} | postprocess_helper(tokens)]
+    [{:Name, attrs, text} | postprocess_helper(tokens)]
   end
 
   # Otherwise, don't do anything with the current token and go to the next token.
   defp postprocess_helper([token | tokens]) do
     [token | postprocess_helper(tokens)]
+  end
+
+  defp split_underscores(token_type, attrs, text, tokens) do
+    graphemes = text |> to_string() |> String.graphemes()
+    [r_first | _] = r_text = Enum.reverse(graphemes)
+    if r_first == "_" do
+      {underscores, r_text} = Enum.split_while(r_text, fn x -> x == "_" end)
+      underscores = Enum.map(underscores, fn x -> {:name, attrs, x} end)
+      [first_part | second_part] = r_text |> Enum.reverse() |> Enum.join() |> String.split("__", parts: 2)
+
+      {first_part, extra_tokens} =
+        if second_part == [] do
+          {first_part, underscores}
+        else
+          extra_token = {:name, attrs, "__#{second_part}"}
+          {first_part, [extra_token] ++ underscores}
+        end
+
+      [{token_type, attrs, first_part} | postprocess_helper(extra_tokens ++ tokens)]
+    else
+      [first_part | second_part] = text |> to_string() |> String.split("__", parts: 2)
+
+      {first_part, extra_tokens} =
+        if second_part == [] do
+          {first_part, []}
+        else
+          extra_token = {:name, attrs, "__#{second_part}"}
+          {first_part, [extra_token]}
+        end
+
+      [{token_type, attrs, first_part} | postprocess_helper(extra_tokens ++ tokens)]
+    end
   end
 
   # Public API
