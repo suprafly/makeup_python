@@ -21,6 +21,10 @@ defmodule Makeup.Lexers.PythonLexer do
              r'|'.join(keyword.kwlist) + r')\b))',                 # pattern matching
              bygroups(Text, Keyword), 'soft-keywords-inner'),
         ],
+
+
+
+
         'soft-keywords-inner': [
             # optional `_` keyword
             (r'(\s+)([^\n_]*)(_\b)', bygroups(Whitespace, using(this), Keyword)),
@@ -47,13 +51,17 @@ defmodule Makeup.Lexers.PythonLexer do
   # # Why this convention? Tokens can't be composed further, while raw strings can.
   # # This way, we immediately know which of the combinators we can compose.
 
-  whitespace = ascii_string([?\r, ?\s, ?\n, ?\f, ?\t], min: 1) |> token(:whitespace)
+  # todo: remove, I think that we do not need it
+  # whitespace = ascii_string([?\r, ?\s, ?\n, ?\f, ?\t], min: 1) |> token(:whitespace)
 
   newlines =
-    ascii_string([?\s, ?\t, ?\r], min: 1)
-    |> optional()
-    |> choice([string("\r\n"), string("\n")])
-    |> optional(ascii_string([?\s, ?\n, ?\f, ?\r], min: 1))
+    ascii_string([?\n, ?\f, ?\r], min: 1)
+    |> token(:whitespace)
+
+  # pygments chooses the `:text` token,
+  # but pattern matching later it is much simpler if we choose `:whitespace`
+  text =
+    ascii_string([?\s, ?\t], min: 1)
     |> token(:whitespace)
 
   any_char = utf8_char([]) |> token(:error)
@@ -183,6 +191,32 @@ defmodule Makeup.Lexers.PythonLexer do
   # rf_string_escape_open = string("{{")
   # rf_string_escape_close = string("}}")
 
+  # match / case:
+  #      'soft-keywords': [
+  #          # `match`, `case` and `_` soft keywords
+  #          (r'(^[ \t]*)'              # at beginning of line + possible indentation
+  #           r'(match|case)\b'         # a possible keyword
+  #           r'(?![ \t]*(?:'           # not followed by...
+  #           r'[:,;=^&|@~)\]}]|(?:' +  # characters and keywords that mean this isn't
+  #           r'|'.join(keyword.kwlist) + r')\b))',                 # pattern matching
+  #           bygroups(Text, Keyword), 'soft-keywords-inner'),
+  #      ],
+
+  match_case =
+    ascii_string([?\t, ?\s], min: 0)
+    |> choice([string("match"), string("case")])
+    |> ascii_char([?\s])
+    |> lookahead_not(ascii_char([?:, ?,, ?;, ?=, ?^, ?&, ?|, ?@, ?~, ?), ?], ?}]))
+    |> lookahead(string(":"))
+    # |> optional(ascii_string([?0..?9, ?_], min: 0))
+    # |> string(".")
+    # |> concat(optional(float_exponent))
+    # |> optional(float_scientific_notation)
+    # |> optional(ascii_char([?j, ?J]))
+    |> token(:name)
+
+
+
   number_integer =
     ascii_char([?0..?9])
     |> ascii_string([?0..?9, ?_], min: 0)
@@ -302,7 +336,10 @@ defmodule Makeup.Lexers.PythonLexer do
         decorator,
 
         newlines,
-        whitespace,
+        text,
+
+        # todo - remove, I think we do not need it:
+        # whitespace,
 
         # Comments
         hashbang_comment,
@@ -341,6 +378,8 @@ defmodule Makeup.Lexers.PythonLexer do
           number_oct,
           number_hex,
           number_integer,
+
+          match_case,
 
           # Names
           variable,
@@ -410,7 +449,9 @@ defmodule Makeup.Lexers.PythonLexer do
     "yield from",
     "yield",
     "as",
-    "with"
+    "with",
+    "match",
+    "case"
   ]
 
   @builtins [
@@ -685,6 +726,7 @@ defmodule Makeup.Lexers.PythonLexer do
   @operator_word ["and", "or", "not", "in", "is"]
   @keyword_namespace ~W[import from as]
   @keyword_constant ~W[True False None]
+  @whitespace ["\n", "\t"]
 
   defp postprocess_helper([]), do: []
 
@@ -696,7 +738,7 @@ defmodule Makeup.Lexers.PythonLexer do
        when text1 == "def" do
     [
       {:keyword_declaration, attrs1, text1},
-      ws,
+      postprocess_whitespace(ws),
       {:name_function, attrs2, text2} | postprocess_helper(tokens)
     ]
   end
@@ -709,7 +751,7 @@ defmodule Makeup.Lexers.PythonLexer do
        when text1 == "class" do
     [
       {:keyword_declaration, attrs1, text1},
-      ws,
+      postprocess_whitespace(ws),
       {:name_class, attrs2, text2} | postprocess_helper(tokens)
     ]
   end
@@ -722,7 +764,6 @@ defmodule Makeup.Lexers.PythonLexer do
     [{:name_decorator, attrs, decorator} | postprocess_helper([t2 | tokens])]
   end
 
-  # suffix=r'\b'
   defp postprocess_helper([
          {:name, attrs, text},
          {:whitespace, _, _} = ws
@@ -731,7 +772,7 @@ defmodule Makeup.Lexers.PythonLexer do
        when text in @keywords do
     [
       {:keyword, attrs, text},
-      ws | postprocess_helper(tokens)
+      postprocess_whitespace(ws) | postprocess_helper(tokens)
     ]
   end
 
@@ -754,7 +795,7 @@ defmodule Makeup.Lexers.PythonLexer do
        when text in @exceptions do
     [
       {:name_exception, attrs, text},
-      ws | postprocess_helper(tokens)
+      postprocess_whitespace(ws) | postprocess_helper(tokens)
     ]
   end
 
@@ -768,7 +809,7 @@ defmodule Makeup.Lexers.PythonLexer do
        when text in @builtin_pseudos do
     [
       {:name_builtin_pseudo, attrs, text},
-      ws | postprocess_helper(tokens)
+      postprocess_whitespace(ws) | postprocess_helper(tokens)
     ]
   end
 
@@ -780,7 +821,7 @@ defmodule Makeup.Lexers.PythonLexer do
        when text in @builtins do
     [
       {:name_builtin, attrs, text},
-      ws | postprocess_helper(tokens)
+      postprocess_whitespace(ws) | postprocess_helper(tokens)
     ]
   end
 
@@ -793,7 +834,7 @@ defmodule Makeup.Lexers.PythonLexer do
        when text in @magic_funcs do
     [
       {:name_function_magic, attrs, text},
-      ws | postprocess_helper(tokens)
+      postprocess_whitespace(ws) | postprocess_helper(tokens)
     ]
   end
 
@@ -806,7 +847,7 @@ defmodule Makeup.Lexers.PythonLexer do
        when text in @magic_vars do
     [
       {:name_variable_magic, attrs, text},
-      ws | postprocess_helper(tokens)
+      postprocess_whitespace(ws) | postprocess_helper(tokens)
     ]
   end
 
@@ -827,7 +868,7 @@ defmodule Makeup.Lexers.PythonLexer do
 
     [
       {:keyword_namespace, attrs, text},
-      {:whitespace, attrs, ws1},
+      postprocess_whitespace({:whitespace, attrs, ws1}),
       {:name, attrs, rem_text}
        | postprocess_helper(tokens)
     ]
@@ -841,7 +882,7 @@ defmodule Makeup.Lexers.PythonLexer do
        when text in @keyword_namespace do
     [
       {:keyword_namespace, attrs, text},
-      ws,
+      postprocess_whitespace(ws),
       {:name, attrs2, text2} | postprocess_helper(tokens)
     ]
   end
@@ -855,24 +896,10 @@ defmodule Makeup.Lexers.PythonLexer do
        when text in @keyword_namespace do
     [
       {:keyword_namespace, attrs, text},
-      ws,
+      postprocess_whitespace(ws),
       {:operator, attrs2, "*"} | postprocess_helper(tokens)
     ]
   end
-
-  # defp postprocess_helper([
-  #        {:name, attrs, text},
-  #        {:whitespace, _, _} = ws,
-  #        {:name, attrs2, text2},
-  #        {:whitespace, _, _} = ws2,
-  #        {:name, attrs3, text3}
-  #        | tokens
-  #      ])
-  #      when text == "from" and text3 == "import" do
-  #   [
-  #     {:keyword_namespace, attrs, text}, ws, {:name, attrs2, text2}, ws2, {:keyword_namespace, attrs3, text3} | postprocess_helper(tokens)
-  #   ]
-  # end
 
   defp postprocess_helper([
          {:name, attrs, text},
@@ -882,7 +909,7 @@ defmodule Makeup.Lexers.PythonLexer do
        when text in @keyword_namespace do
     [
       {:keyword_namespace, attrs, text},
-      ws,
+      postprocess_whitespace(ws),
       {:name, attrs2, text2} | postprocess_helper(tokens)
     ]
   end
@@ -894,6 +921,21 @@ defmodule Makeup.Lexers.PythonLexer do
   defp postprocess_helper([{:number_integer, attrs, text} | tokens]) when is_list(text) do
     split_underscores(:number_integer, attrs, text, tokens)
   end
+
+  # ------------------------------------------------------------------------------------
+  # todo - this is a hack. we should detect it way before this point
+  defp postprocess_helper([{:number_float, attrs, "."} | tokens]) do
+    [{:operator, attrs, "."} | postprocess_helper(tokens)]
+  end
+
+  defp postprocess_helper([{:number_float, attrs, ["."]} | tokens]) do
+    [{:operator, attrs, "."} | postprocess_helper(tokens)]
+  end
+
+  defp postprocess_helper([{:number_float, attrs, ["", "."]} | tokens]) do
+    [{:operator, attrs, "."} | postprocess_helper(tokens)]
+  end
+  # ------------------------------------------------------------------------------------
 
   defp postprocess_helper([{:number_float, attrs, text} | tokens]) when is_list(text) do
     split_underscores(:number_float, attrs, text, tokens)
@@ -975,6 +1017,14 @@ defmodule Makeup.Lexers.PythonLexer do
 
       [{token_type, attrs, first_part} | postprocess_helper(extra_tokens ++ tokens)]
     end
+  end
+
+  defp postprocess_whitespace({:whitespace, attrs, text}) when text in @whitespace do
+    {:whitespace, attrs, text}
+  end
+
+  defp postprocess_whitespace({:whitespace, attrs, text}) do
+    {:text, attrs, text}
   end
 
   # Public API
