@@ -11,20 +11,6 @@ defmodule Makeup.Lexers.PythonLexer do
             (r'\}\}', String.Escape),
         ],
 
-    - match / case:
-        'soft-keywords': [
-            # `match`, `case` and `_` soft keywords
-            (r'(^[ \t]*)'              # at beginning of line + possible indentation
-             r'(match|case)\b'         # a possible keyword
-             r'(?![ \t]*(?:'           # not followed by...
-             r'[:,;=^&|@~)\]}]|(?:' +  # characters and keywords that mean this isn't
-             r'|'.join(keyword.kwlist) + r')\b))',                 # pattern matching
-             bygroups(Text, Keyword), 'soft-keywords-inner'),
-        ],
-
-
-
-
         'soft-keywords-inner': [
             # optional `_` keyword
             (r'(\s+)([^\n_]*)(_\b)', bygroups(Whitespace, using(this), Keyword)),
@@ -50,9 +36,6 @@ defmodule Makeup.Lexers.PythonLexer do
   # #
   # # Why this convention? Tokens can't be composed further, while raw strings can.
   # # This way, we immediately know which of the combinators we can compose.
-
-  # todo: remove, I think that we do not need it
-  # whitespace = ascii_string([?\r, ?\s, ?\n, ?\f, ?\t], min: 1) |> token(:whitespace)
 
   newlines =
     ascii_string([?\n, ?\f, ?\r], min: 1)
@@ -191,31 +174,13 @@ defmodule Makeup.Lexers.PythonLexer do
   # rf_string_escape_open = string("{{")
   # rf_string_escape_close = string("}}")
 
-  # match / case:
-  #      'soft-keywords': [
-  #          # `match`, `case` and `_` soft keywords
-  #          (r'(^[ \t]*)'              # at beginning of line + possible indentation
-  #           r'(match|case)\b'         # a possible keyword
-  #           r'(?![ \t]*(?:'           # not followed by...
-  #           r'[:,;=^&|@~)\]}]|(?:' +  # characters and keywords that mean this isn't
-  #           r'|'.join(keyword.kwlist) + r')\b))',                 # pattern matching
-  #           bygroups(Text, Keyword), 'soft-keywords-inner'),
-  #      ],
-
   match_case =
     ascii_string([?\t, ?\s], min: 0)
     |> choice([string("match"), string("case")])
     |> ascii_char([?\s])
     |> lookahead_not(ascii_char([?:, ?,, ?;, ?=, ?^, ?&, ?|, ?@, ?~, ?), ?], ?}]))
     |> lookahead(string(":"))
-    # |> optional(ascii_string([?0..?9, ?_], min: 0))
-    # |> string(".")
-    # |> concat(optional(float_exponent))
-    # |> optional(float_scientific_notation)
-    # |> optional(ascii_char([?j, ?J]))
     |> token(:name)
-
-
 
   number_integer =
     ascii_char([?0..?9])
@@ -234,11 +199,26 @@ defmodule Makeup.Lexers.PythonLexer do
 
   # floats can start with a "." and no integer part
   number_float =
-    optional(ascii_char([?0..?9]))
+    ascii_char([?0..?9])
     |> optional(ascii_string([?0..?9, ?_], min: 0))
     |> string(".")
-    |> concat(optional(float_exponent))
+    |> optional(float_exponent)
     |> optional(float_scientific_notation)
+    |> optional(ascii_char([?j, ?J]))
+    |> token(:number_float)
+
+  number_float_no_exponent =
+    ascii_char([?0..?9])
+    |> optional(ascii_string([?0..?9, ?_], min: 0))
+    |> string(".")
+    |> token(:number_float)
+
+  number_float_no_mantissa =
+    string(".")
+    |> choice([
+        float_exponent |> optional(float_scientific_notation),
+        float_scientific_notation
+      ])
     |> optional(ascii_char([?j, ?J]))
     |> token(:number_float)
 
@@ -278,10 +258,13 @@ defmodule Makeup.Lexers.PythonLexer do
 
   decorator =
     ascii_char([?\r, ?\n, ?\f])
+    |> token(:whitespace)
     |> ascii_string([?\r, ?\s, ?\n, ?\f, ?\t], min: 0)
+    |> token(:whitespace)
     |> string("@")
     |> concat(decorator_line)
     |> token(:name_decorator)
+    |> post_traverse({:parse_decorator_whitespace, []})
 
   # Python3 has ellipsis: ...
   # and matrix mult: @
@@ -331,15 +314,14 @@ defmodule Makeup.Lexers.PythonLexer do
         # can be missing the mantissa, ex: .7
         number_float,
         number_float_no_decimal,
+        number_float_no_exponent,
+        number_float_no_mantissa,
 
         # Decorator needs to come before Operators, because @ is also used for matrix multiplication
         decorator,
 
         newlines,
         text,
-
-        # todo - remove, I think we do not need it:
-        # whitespace,
 
         # Comments
         hashbang_comment,
@@ -922,21 +904,6 @@ defmodule Makeup.Lexers.PythonLexer do
     split_underscores(:number_integer, attrs, text, tokens)
   end
 
-  # ------------------------------------------------------------------------------------
-  # todo - this is a hack. we should detect it way before this point
-  defp postprocess_helper([{:number_float, attrs, "."} | tokens]) do
-    [{:operator, attrs, "."} | postprocess_helper(tokens)]
-  end
-
-  defp postprocess_helper([{:number_float, attrs, ["."]} | tokens]) do
-    [{:operator, attrs, "."} | postprocess_helper(tokens)]
-  end
-
-  defp postprocess_helper([{:number_float, attrs, ["", "."]} | tokens]) do
-    [{:operator, attrs, "."} | postprocess_helper(tokens)]
-  end
-  # ------------------------------------------------------------------------------------
-
   defp postprocess_helper([{:number_float, attrs, text} | tokens]) when is_list(text) do
     split_underscores(:number_float, attrs, text, tokens)
   end
@@ -1071,6 +1038,24 @@ defmodule Makeup.Lexers.PythonLexer do
       "\n" -> tokens
       "\n" <> rest -> [{ttype, meta, rest} | tokens]
     end
+  end
+
+  defp parse_decorator_whitespace(rest, args, context, _line, _offset) do
+    # parse the newline and optional whitespace from the decorators
+    # and rebuild the token list with them in front of the decorator.
+    [{token, attrs, [nested_tokens | text]}] = args
+    decorator_token = {token, attrs, text}
+    {ws1, ws_attrs1, [n1 | n2]} = nested_tokens
+    args =
+      if length(n2) > 0 do
+        [n2] = n2
+        t1 = {ws1, ws_attrs1, n2}
+        [decorator_token, t1, n1]
+      else
+        [decorator_token, n1]
+      end
+
+    {rest, args, context}
   end
 
   @impl Makeup.Lexer
