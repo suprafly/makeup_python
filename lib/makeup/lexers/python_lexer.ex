@@ -977,6 +977,10 @@ defmodule Makeup.Lexers.PythonLexer do
     [{:string_escape, attrs, to_string(text)} | postprocess_helper(tokens)]
   end
 
+  defp postprocess_helper([{:name_decorator, attrs, text} | tokens]) do
+    [{:name_decorator, attrs, to_string(text)} | postprocess_helper(tokens)]
+  end
+
   # Unused variables
   defp postprocess_helper([{:name, attrs, "_" <> _name = text} | tokens]) do
     [{:Name, attrs, text} | postprocess_helper(tokens)]
@@ -988,34 +992,27 @@ defmodule Makeup.Lexers.PythonLexer do
   end
 
   defp split_underscores(token_type, attrs, text, tokens) do
-    graphemes = text |> to_string() |> String.graphemes()
-    [r_first | _] = r_text = Enum.reverse(graphemes)
-    if r_first == "_" do
-      {underscores, r_text} = Enum.split_while(r_text, fn x -> x == "_" end)
-      underscores = Enum.map(underscores, fn x -> {:name, attrs, x} end)
-      [first_part | second_part] = r_text |> Enum.reverse() |> Enum.join() |> String.split("__", parts: 2)
+    # Put the string together, then attempt to split it on the first double underscores
+    [first_part | second_part] = text |> to_string() |> String.split("__", parts: 2)
 
-      {first_part, extra_tokens} =
-        if second_part == [] do
-          {first_part, underscores}
-        else
-          extra_token = {:name, attrs, "__#{second_part}"}
-          {first_part, [extra_token] ++ underscores}
-        end
-
+    with [] <- second_part,
+         true <- String.ends_with?(first_part, "_")
+    do
+      # In the case of a trailing underscore but with no double underscores, we
+      # pop it off and tokenize it as a :name
+      first_part = String.replace_trailing(first_part, "_", "")
+      extra_tokens = [{:name, attrs, "_"}]
       [{token_type, attrs, first_part} | postprocess_helper(extra_tokens ++ tokens)]
     else
-      [first_part | second_part] = text |> to_string() |> String.split("__", parts: 2)
+      [second_part] ->
+        # We don't need to worry about a trailing underscore, because everything after
+        # the double underscore is tokenized as a :name
+        extra_tokens = [{:name, attrs, "__#{second_part}"}]
+        [{token_type, attrs, first_part} | postprocess_helper(extra_tokens ++ tokens)]
 
-      {first_part, extra_tokens} =
-        if second_part == [] do
-          {first_part, []}
-        else
-          extra_token = {:name, attrs, "__#{second_part}"}
-          {first_part, [extra_token]}
-        end
-
-      [{token_type, attrs, first_part} | postprocess_helper(extra_tokens ++ tokens)]
+      false ->
+        # In this case, there is not trailing underscore, so we proceed as normal
+        [{token_type, attrs, first_part} | postprocess_helper(tokens)]
     end
   end
 
@@ -1031,6 +1028,7 @@ defmodule Makeup.Lexers.PythonLexer do
   @impl Makeup.Lexer
   def postprocess(tokens, _opts \\ []), do: postprocess_helper(tokens)
     # |> IO.inspect(limit: :infinity, pretty: true) # for debugging
+    # |> tap(&Enum.map(&1, fn {t, _, v} -> {t, v} end) |> IO.inspect(limit: :infinity, pretty: true))
 
   # ###################################################################
   # # Step #3: highlight matching delimiters
