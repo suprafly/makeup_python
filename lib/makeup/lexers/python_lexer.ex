@@ -739,14 +739,6 @@ defmodule Makeup.Lexers.PythonLexer do
   end
 
   defp postprocess_helper([
-         {:name_decorator, attrs, [text1, _text2] = decorator},
-         {next_token, _, _} = t2 | tokens
-       ])
-       when text1 == "@" and next_token != :whitespace do
-    [{:name_decorator, attrs, decorator} | postprocess_helper([t2 | tokens])]
-  end
-
-  defp postprocess_helper([
          {:name, attrs, text},
          {:whitespace, _, _} = ws
          | tokens
@@ -781,8 +773,6 @@ defmodule Makeup.Lexers.PythonLexer do
     ]
   end
 
-  # prefix: r'(?<!\.)'
-  # suffix=r'\b'
   defp postprocess_helper([
          {:name, attrs, text},
          {:whitespace, _, _} = ws
@@ -807,7 +797,6 @@ defmodule Makeup.Lexers.PythonLexer do
     ]
   end
 
-  # suffix=r'\b'
   defp postprocess_helper([
          {:name, attrs, text},
          {:whitespace, _, _} = ws
@@ -820,7 +809,6 @@ defmodule Makeup.Lexers.PythonLexer do
     ]
   end
 
-  # suffix=r'\b'
   defp postprocess_helper([
          {:name, attrs, text},
          {:whitespace, _, _} = ws
@@ -841,9 +829,8 @@ defmodule Makeup.Lexers.PythonLexer do
          {:name, attrs, [text | rem_text]} | tokens
        ])
        when text in @keyword_namespace do
-
     [ws1 | rem_text] = rem_text
-    {ws2, rem_text} = List.pop_at(rem_text, -1)
+    {ws2, [inner_text]} = List.pop_at(rem_text, -1)
 
     # We want to parse 'import' properly, so add the whitespace and continue
     tokens = [{:whitespace, attrs, ws2} | tokens]
@@ -851,7 +838,7 @@ defmodule Makeup.Lexers.PythonLexer do
     [
       {:keyword_namespace, attrs, text},
       postprocess_whitespace({:whitespace, attrs, ws1}),
-      {:name, attrs, rem_text}
+      {:name, attrs, inner_text}
        | postprocess_helper(tokens)
     ]
   end
@@ -868,7 +855,6 @@ defmodule Makeup.Lexers.PythonLexer do
       {:name, attrs2, text2} | postprocess_helper(tokens)
     ]
   end
-
 
   defp postprocess_helper([
          {:name, attrs, text},
@@ -943,6 +929,18 @@ defmodule Makeup.Lexers.PythonLexer do
   defp postprocess_helper([{:string_escape, attrs, text} | tokens]) do
     [{:string_escape, attrs, to_string(text)} | postprocess_helper(tokens)]
   end
+
+  # ----------------------------------------------------------------------------
+  # todo - I think we do not need this
+  # ----------------------------------------------------------------------------
+  # defp postprocess_helper([
+  #        {:name_decorator, attrs, [text1, _text2] = decorator},
+  #        {next_token, _, _} = t2 | tokens
+  #      ])
+  #      when text1 == "@" and next_token != :whitespace do
+  #   [{:name_decorator, attrs, decorator} | postprocess_helper([t2 | tokens])]
+  # end
+  # ----------------------------------------------------------------------------
 
   defp postprocess_helper([{:name_decorator, attrs, text} | tokens]) do
     [{:name_decorator, attrs, to_string(text)} | postprocess_helper(tokens)]
