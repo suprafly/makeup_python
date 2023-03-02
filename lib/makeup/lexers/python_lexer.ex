@@ -6,12 +6,9 @@ defmodule Makeup.Lexers.PythonLexer do
 
   TODO:
 
-        'bytesescape': [
-            (r'\\([\\abfnrtv"\']|\n|x[a-fA-F0-9]{2}|[0-7]{1,3})', String.Escape)
-        ],
-        'stringescape': [
-            (r'\\(N\{.*?\}|u[a-fA-F0-9]{4}|U[a-fA-F0-9]{8})', String.Escape),
-            include('bytesescape')
+        'rfstringescape': [
+            (r'\{\{', String.Escape),
+            (r'\}\}', String.Escape),
         ],
 
     - match / case:
@@ -134,7 +131,28 @@ defmodule Makeup.Lexers.PythonLexer do
   # "%s %s" %('Hello','World',)
   percent_string_interp = string_like("%(", ")", [variable], :string_interpol)
 
+  bytes_escape =
+    string("\\")
+    |> choice([
+        ascii_char([?\\, ?a, ?b, ?f, ?n, ?r, ?t, ?v, ?", ?']),
+        ascii_char([?\n]),
+        string("x") |> ascii_string([?a..?f, ?A..?F, ?0..?9], 2),
+        ascii_string([?0..?7], min: 1, max: 3)
+      ])
+    |> token(:string_escape)
+
+  string_escape =
+    string("\\")
+    |> choice([
+      string("N{") |> ascii_string([0..122, 124, 126, 127], min: 1) |> string("}"),
+      string("u") |> ascii_string([?a..?f, ?A..?F, ?0..?9], 4),
+      string("U") |> ascii_string([?a..?f, ?A..?F, ?0..?9], 8)
+      ])
+    |> token(:string_escape)
+
   combinators_inside_string = [
+    bytes_escape,
+    string_escape,
     percent_string_interp,
     unicode_char_in_string,
     escaped_char
@@ -161,6 +179,10 @@ defmodule Makeup.Lexers.PythonLexer do
   single_quoted_string = string_like("'", "'", combinators_inside_string, :string) # |> lookahead(string("\n"))
   double_quoted_string = string_like("\"", "\"", combinators_inside_string, :string) # |> lookahead(string("\n"))
 
+  # f-string escapes
+  # rf_string_escape_open = string("{{")
+  # rf_string_escape_close = string("}}")
+
   number_integer =
     ascii_char([?0..?9])
     |> ascii_string([?0..?9, ?_], min: 0)
@@ -178,7 +200,6 @@ defmodule Makeup.Lexers.PythonLexer do
 
   # floats can start with a "." and no integer part
   number_float =
-    # ascii_string([?0..?9, ?\s, ?\n, ?\f, ?\r, ?\t], min: 1)
     optional(ascii_char([?0..?9]))
     |> optional(ascii_string([?0..?9, ?_], min: 0))
     |> string(".")
@@ -196,13 +217,6 @@ defmodule Makeup.Lexers.PythonLexer do
     |> optional(ascii_string([?0..?9, ?_], min: 0))
     |> optional(ascii_char([?j, ?J]))
     |> token(:number_float)
-
-  # number_float_no_decimal =
-  #   ascii_string([?0..?9, ?\s, ?\n, ?\f, ?\r, ?\t], min: 1)
-  #   |> ascii_string([?0..?9, ?_], min: 0)
-  #   |> optional(float_scientific_notation)
-  #   |> optional(ascii_char([?j, ?J]))
-  #   |> token(:number_float)
 
   number_bin =
     string("0b")
@@ -299,6 +313,13 @@ defmodule Makeup.Lexers.PythonLexer do
         double_quoted_heredoc_affix,
         single_quoted_heredocs,
         double_quoted_heredocs,
+
+        # escapes,
+        # bytes_escape,
+        # string_escape,
+        # rf_string_escape_open,
+        # rf_string_escape_close,
+
         single_quoted_string,
         double_quoted_string,
 
@@ -313,6 +334,7 @@ defmodule Makeup.Lexers.PythonLexer do
           operator,
         ] ++
         delimiter_pairs ++
+        # escapes ++
         [
           # Numbers
           number_bin,
@@ -899,6 +921,18 @@ defmodule Makeup.Lexers.PythonLexer do
 
   defp postprocess_helper([{:string_doc, attrs, text} | tokens]) do
     [{:string_doc, attrs, to_string(text)} | postprocess_helper(tokens)]
+  end
+
+  defp postprocess_helper([{:string_affix, attrs, text} | tokens]) do
+    [{:string_affix, attrs, to_string(text)} | postprocess_helper(tokens)]
+  end
+
+  defp postprocess_helper([{:string, attrs, text} | tokens]) do
+    [{:string, attrs, to_string(text)} | postprocess_helper(tokens)]
+  end
+
+  defp postprocess_helper([{:string_escape, attrs, text} | tokens]) do
+    [{:string_escape, attrs, to_string(text)} | postprocess_helper(tokens)]
   end
 
   # Unused variables
