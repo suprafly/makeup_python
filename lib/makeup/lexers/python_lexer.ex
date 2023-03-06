@@ -4,12 +4,58 @@ defmodule Makeup.Lexers.PythonLexer do
 
   This lexers handles Python 3.x code.
 
-  TODO:
+  ## TODO
+
+    [ ] f-strings
+
+        'expr-inside-fstring': [
+            (r'[{([]', Punctuation, 'expr-inside-fstring-inner'),
+            # without format specifier
+            (r'(=\s*)?'         # debug (https://bugs.python.org/issue36817)
+             r'(\![sraf])?'     # conversion
+             r'\}', String.Interpol, '#pop'),
+            # with format specifier
+            # we'll catch the remaining '}' in the outer scope
+            (r'(=\s*)?'         # debug (https://bugs.python.org/issue36817)
+             r'(\![sraf])?'     # conversion
+             r':', String.Interpol, '#pop'),
+            (r'\s+', Whitespace),  # allow new lines
+            include('expr'),
+        ],
+        'expr-inside-fstring-inner': [
+            (r'[{([]', Punctuation, 'expr-inside-fstring-inner'),
+            (r'[])}]', Punctuation, '#pop'),
+            (r'\s+', Whitespace),  # allow new lines
+            include('expr'),
+        ],
 
         'rfstringescape': [
             (r'\{\{', String.Escape),
             (r'\}\}', String.Escape),
         ],
+        'fstringescape': [
+            include('rfstringescape'),
+            include('stringescape'),
+        ],
+        'fstrings-single': fstring_rules(String.Single),
+        'fstrings-double': fstring_rules(String.Double),
+
+        def fstring_rules(ttype):
+            return [
+                # Assuming that a '}' is the closing brace after format specifier.
+                # Sadly, this means that we won't detect syntax error. But it's
+                # more important to parse correct syntax correctly, than to
+                # highlight invalid syntax.
+                (r'\}', String.Interpol),
+                (r'\{', String.Interpol, 'expr-inside-fstring'),
+                # backslashes, quotes and formatting signs must be parsed one at a time
+                (r'[^\\\'"{}\n]+', ttype),
+                (r'[\'"\\]', ttype),
+                # newlines are an error (use "nl" state)
+            ]
+
+
+    [ ] soft keywords
 
         'soft-keywords-inner': [
             # optional `_` keyword
@@ -73,6 +119,11 @@ defmodule Makeup.Lexers.PythonLexer do
   escaped_char =
     string("\\")
     |> utf8_string([], 1)
+    |> token(:string_escape)
+
+  escaped_char_sequence =
+    string("\\")
+    |> ascii_char([?a, ?b, ?f, ?n, ?r, ?t, ?v])
     |> token(:string_escape)
 
   variable =
@@ -152,27 +203,85 @@ defmodule Makeup.Lexers.PythonLexer do
   single_quoted_heredocs = string_like("'''", "'''", combinators_inside_string, :string_doc)
   double_quoted_heredocs = string_like(~S["""], ~S["""], combinators_inside_string, :string_doc)
 
+  single_quoted_string = string_like("'", "'", combinators_inside_string, :string)
+  double_quoted_string = string_like("\"", "\"", combinators_inside_string, :string)
+
   # f-strings
   # f'Hello {name}! This is {program}'
-  inner_f_string_interp = string_like("{", "}", [variable], :string_interpol)
+  f_string_escape_open = string("{{") |> token(:string_escape)
+  f_string_escape_close = string("}}") |> token(:string_escape)
+
+  inner_f_string_interp =
+    :f_string_expr
+    |> parsec()
+    |> many_surrounded_by("{", "}", :string_interpol)
 
   f_string_interp_choices = [
+    f_string_escape_open,
+    f_string_escape_close,
     inner_f_string_interp,
     unicode_char_in_string,
-    escaped_char
+    # escaped_char,
+    escaped_char_sequence
   ]
 
-  single_quoted_f_string_interpolation = string_like("f'", "'", f_string_interp_choices, :string)
+  single_quoted_f_string_interpolation = string_like(
+    choice([
+      string("f'"),
+      string("fr'"),
+      string("rf'"),
+      string("fR'"),
+      string("Rf'"),
+      string("F'"),
+      string("Fr'"),
+      string("rF'"),
+      string("FR'"),
+      string("RF'"),
+      ]), "'", f_string_interp_choices, :string)
 
   double_quoted_f_string_interpolation =
-    string_like(~S[f"], ~S["], f_string_interp_choices, :string)
+    string_like(
+      choice([
+        string(~S[f"]),
+        string(~S[fr"]),
+        string(~S[rf"]),
+        string(~S[fR"]),
+        string(~S[Rf"]),
+        string(~S[F"]),
+        string(~S[Fr"]),
+        string(~S[rF"]),
+        string(~S[FR"]),
+        string(~S[RF"]),
+        ]), ~S["], f_string_interp_choices, :string)
 
-  single_quoted_string = string_like("'", "'", combinators_inside_string, :string) # |> lookahead(string("\n"))
-  double_quoted_string = string_like("\"", "\"", combinators_inside_string, :string) # |> lookahead(string("\n"))
+  single_quoted_f_heredocs_interpolation = string_like(
+    choice([
+      string("f'''"),
+      string("fr'''"),
+      string("rf'''"),
+      string("fR'''"),
+      string("Rf'''"),
+      string("F'''"),
+      string("Fr'''"),
+      string("rF'''"),
+      string("FR'''"),
+      string("RF'''"),
+      ]), "'''", f_string_interp_choices, :string)
 
-  # f-string escapes
-  # rf_string_escape_open = string("{{")
-  # rf_string_escape_close = string("}}")
+  double_quoted_f_heredocs_interpolation =
+    string_like(
+      choice([
+        string(~S[f"""]),
+        string(~S[fr"""]),
+        string(~S[rf"""]),
+        string(~S[fR"""]),
+        string(~S[Rf"""]),
+        string(~S[F"""]),
+        string(~S[Fr"""]),
+        string(~S[rF"""]),
+        string(~S[FR"""]),
+        string(~S[RF"""]),
+        ]), ~S["""], f_string_interp_choices, :string)
 
   match_case =
     ascii_string([?\t, ?\s], min: 0)
@@ -266,9 +375,7 @@ defmodule Makeup.Lexers.PythonLexer do
     |> token(:name_decorator)
     |> post_traverse({:parse_decorator_whitespace, []})
 
-  # Python3 has ellipsis: ...
-  # and matrix mult: @
-
+  # Python3 has ellipsis: ... , and matrix mult: @
   operator =
     ~W(
         + - * / % ** //
@@ -343,8 +450,10 @@ defmodule Makeup.Lexers.PythonLexer do
         double_quoted_string,
 
         # String interpolation
+        single_quoted_f_heredocs_interpolation,
+        double_quoted_f_heredocs_interpolation,
         single_quoted_f_string_interpolation,
-        double_quoted_f_string_interpolation
+        double_quoted_f_string_interpolation,
       ] ++
         [
           fromimport,
@@ -374,10 +483,161 @@ defmodule Makeup.Lexers.PythonLexer do
         ]
     )
 
+  any_chars_except_curly_braces =
+    ascii_string([0..122, 124, 126, 127], min: 0)
+    |> token(:string)
+
+  optional_equal =
+    ascii_char([?=]) |> token(:string_interpol)
+
+  open_format_spec =
+    ascii_char([?:])
+    |> ascii_string([?\s, ?\t], min: 0)
+    |> lexeme()
+    |> token(:string_interpol)
+    |> optional(any_chars_except_curly_braces)
+
+  optional_conversion =
+    ascii_string([?\s, ?\t], min: 0)
+    |> ascii_char([?!])
+    |> ascii_char([?s, ?r, ?a, ?f])
+    |> lexeme()
+    |> token(:string_interpol)
+
+  # We need to match vars, or expressions
+  # todo - this is a first pass
+  inner_expr =
+    ascii_string([?a..?z, ?A..?Z, ?_], 1)
+    |> optional(ascii_string([?a..?z, ?_, ?0..?9, ?A..?Z, ?(, ?), ?[, ?], ?\s, ?\t], min: 1))
+    |> lexeme()
+    |> token(:name)
+
+  f_string_inner_value_formatting =
+    inner_expr
+    |> optional(newlines)
+    |> optional(ascii_string([?\s, ?\t], min: 0))
+    |> optional(newlines)
+    |> concat(optional(optional_equal))
+    |> optional(newlines)
+    |> concat(optional(optional_conversion))
+    |> optional(newlines)
+    |> concat(optional(open_format_spec))
+    |> optional(newlines)
+
+  f_string_inner_expr =
+    choice(
+      [
+        number_float,
+        number_float_no_decimal,
+        number_float_no_exponent,
+        number_float_no_mantissa,
+        newlines,
+        text,
+        single_quoted_string,
+        double_quoted_string,
+        operator,
+      ] ++
+        delimiter_pairs ++
+        [
+          number_bin,
+          number_oct,
+          number_hex,
+          number_integer,
+          variable,
+          punctuation,
+          any_char
+        ]
+    )
+    |> many_surrounded_by("(", ")", :name)
+
+
+  # ########################################################################################################################
+  # From the [Python language spec](https://docs.python.org/3/reference/lexical_analysis.html#formatted-string-literals),
+  # todo - remove laver
+  # ########################################################################################################################
+  # f_expression =
+  # f_string          ::=  (literal_char | "{{" | "}}" | replacement_field)*
+
+  # replacement_field ::=  "{" f_expression ["="] ["!" conversion] [":" format_spec] "}"
+
+  # f_expression      ::=  (conditional_expression | "*" or_expr)
+  #                          ("," conditional_expression | "," "*" or_expr)* [","]
+  #                        | yield_expression
+
+  # conversion        ::=  "s" | "r" | "a"
+
+  # format_spec       ::=  (literal_char | NULL | replacement_field)*
+
+  # literal_char      ::=  <any code point except "{", "}" or NULL>
+  # ########################################################################################################################
+
+  # --------------------------------------------------------
+  # Handle nested f-strings
+  nested_f_strings = choice([
+    # The caveat is that we need to match the nested
+    # f-strings first before matching inner_f_string_interp,
+    # otherwise we will miss the nested f-strings.
+    single_quoted_f_heredocs_interpolation,
+    double_quoted_f_heredocs_interpolation,
+    single_quoted_f_string_interpolation,
+    double_quoted_f_string_interpolation,
+
+    # This handles a one-level deep f-string nesting
+    inner_f_string_interp,
+  ])
+  # Now we need to handle the optional
+  # f_string_inner_value_formatting on the nested f-string
+  |> optional(newlines)
+  |> optional(ascii_string([?\s, ?\t], min: 0))
+  |> optional(newlines)
+  |> concat(optional(optional_equal))
+  |> optional(newlines)
+  |> concat(optional(optional_conversion))
+  |> optional(newlines)
+  |> concat(optional(open_format_spec))
+  |> optional(newlines)
+
+  # --------------------------------------------------------
+
+  f_string_expression_combinator =
+    choice(
+      [
+        number_float,
+        number_float_no_decimal,
+        number_float_no_exponent,
+        number_float_no_mantissa,
+        newlines,
+        text,
+        single_quoted_string,
+        double_quoted_string,
+
+        f_string_inner_expr,
+
+        nested_f_strings,
+
+        f_string_inner_value_formatting,
+
+        operator,
+      ] ++
+        delimiter_pairs ++
+        [
+          number_bin,
+          number_oct,
+          number_hex,
+          number_integer,
+          variable,
+          punctuation,
+          any_char
+        ]
+    )
+
   # By default, don't inline the lexers.
   # Inlining them increases performance by ~20%
   # at the cost of doubling the compilation times...
   @inline false
+
+  # Define a private parser for f-string expressions
+  defparsecp :f_string_expr, f_string_expression_combinator, inline: @inline
 
   @doc false
   def __as_python_language__({ttype, meta, value}) do
@@ -747,6 +1007,17 @@ defmodule Makeup.Lexers.PythonLexer do
     [
       {:keyword, attrs, text},
       postprocess_whitespace(ws) | postprocess_helper(tokens)
+    ]
+  end
+
+  defp postprocess_helper([
+         {:name, attrs, text},
+         {:string, _, [text2]} = ws
+         | tokens
+       ])
+       when text in @keywords and text2 == " " do
+    [
+      {:keyword, attrs, text} | postprocess_helper([ws | tokens])
     ]
   end
 
